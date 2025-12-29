@@ -1,0 +1,18 @@
+[project]
+name = "szz-llm-refiner"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Emanuele",email = "e.mandato@studenti.unisannio.it"}
+]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+]
+
+[tool.poetry]
+packages = [{include = "szz_llm_refiner", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
