@@ -1,40 +1,345 @@
 import sys
+import os
+import json
+import shutil
+import tempfile
+import argparse
+import subprocess
+from dataclasses import dataclass, asdict
+from typing import Optional
 from .miner import GitMiner
 from .llm_refiner import LLMRefiner
 
 
-def main():
-    print("=== SZZ-LLM-Refiner: Workflow Completo ===")
+@dataclass
+class AnalysisResult:
+    """Struttura dati per i risultati dell'analisi."""
+    fix_commit: str
+    commit_message: str
+    is_bug: bool
+    bug_inducing_commits: list[str]
 
-    # Percorso del repository passato come argomento [cite: 1315]
-    path = sys.argv[1] if len(sys.argv) > 1 else "."
 
-    miner = GitMiner(path)
-    refiner = LLMRefiner()
+@dataclass
+class AnalysisReport:
+    """Report completo dell'analisi."""
+    repository: str
+    branch: str
+    total_potential_fixes: int
+    analyzed_commits: int
+    confirmed_bugs: int
+    results: list[dict]
+    errors: list[str]
 
-    # 1. Mining dei fix [cite: 6]
+
+def clone_repository(url: str, branch: str = "main", dest: Optional[str] = None) -> str:
+    """
+    Clona un repository Git da URL.
+    Restituisce il percorso della directory clonata.
+    """
+    if dest is None:
+        dest = tempfile.mkdtemp(prefix="szz_repo_")
+
+    print(f"Cloning {url} (branch: {branch})...", flush=True)
+
+    result = subprocess.run(
+        ["git", "clone", "--branch", branch, "--single-branch", "--depth", "1000", url, dest],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        # Prova senza specificare il branch (usa default)
+        print(f"Branch '{branch}' non trovato, provo con branch default...", flush=True)
+        shutil.rmtree(dest, ignore_errors=True)
+        dest = tempfile.mkdtemp(prefix="szz_repo_")
+
+        result = subprocess.run(
+            ["git", "clone", "--single-branch", "--depth", "1000", url, dest],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Errore clone: {result.stderr}")
+
+    print(f"Repository clonato in: {dest}", flush=True)
+    return dest
+
+
+def check_git_installed() -> bool:
+    """Verifica che git sia installato e accessibile."""
+    try:
+        result = subprocess.run(
+            ["git", "--version"],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def check_ollama_running(url: str = "http://localhost:11434") -> bool:
+    """Verifica che Ollama sia in esecuzione."""
+    try:
+        import requests
+        response = requests.get(f"{url}/api/tags", timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def run_analysis(
+        repo_path: str,
+        branch: str = "main",
+        limit: int = 10,
+        model: str = "qwen2.5-coder:7b",
+        output_format: str = "text",
+        skip_llm: bool = False
+) -> AnalysisReport:
+    """
+    Esegue l'analisi SZZ completa.
+    """
+    errors = []
+    results = []
+
+    miner = GitMiner(repo_path)
+    refiner = LLMRefiner(model=model) if not skip_llm else None
+
+    # 1. Mining dei fix
+    print("Scanning repository for fix commits...", flush=True)
     potential_fixes = miner.get_fixing_commits()
-    print(f"Trovati {len(potential_fixes)} potenziali fix commit.")
+    print(f"Found {len(potential_fixes)} potential fix commits.", flush=True)
 
-    # 2. Refinement con LLM (Analisi Statica Automatica) [cite: 73]
+    if limit > 0:
+        potential_fixes = potential_fixes[:limit]
+
+    # 2. Analisi di ogni commit
     confirmed_bugs = []
-    print("\nInizio raffinamento con LLM sui primi 10 commit...")
-    for h in potential_fixes[:10]:
-        msg, diff = miner.get_commit_diff(h)
-        print(f"Analizzando {h[:8]}...")
 
-        if refiner.is_real_bug_fix(msg, diff):
-            print(f"  [+] Confermato come BUG")
-            confirmed_bugs.append(h)
+    print(f"\nAnalyzing {len(potential_fixes)} commits...", flush=True)
+
+    for i, commit_hash in enumerate(potential_fixes, 1):
+        print(f"[{i}/{len(potential_fixes)}] Analyzing {commit_hash[:8]}...", flush=True)
+
+        try:
+            msg, diff = miner.get_commit_diff(commit_hash)
+
+            # Refinement con LLM (se abilitato)
+            if refiner and not skip_llm:
+                is_bug = refiner.is_real_bug_fix(msg, diff)
+                status = "BUG" if is_bug else "REFACTORING"
+                print(f"    LLM verdict: {status}", flush=True)
+            else:
+                # Senza LLM, considera tutti come potenziali bug
+                is_bug = True
+                print(f"    Skipped LLM (assuming BUG)", flush=True)
+
+            # 3. SZZ per i bug confermati
+            bics = []
+            if is_bug:
+                confirmed_bugs.append(commit_hash)
+                bics = miner.get_bug_inducing_commits(commit_hash)
+                if bics:
+                    print(f"    Found {len(bics)} bug-inducing commits", flush=True)
+
+            results.append(asdict(AnalysisResult(
+                fix_commit=commit_hash,
+                commit_message=msg[:200],  # Tronca messaggi lunghi
+                is_bug=is_bug,
+                bug_inducing_commits=bics
+            )))
+
+        except Exception as e:
+            error_msg = f"Error analyzing {commit_hash[:8]}: {str(e)}"
+            print(f"    ERROR: {e}", flush=True)
+            errors.append(error_msg)
+
+    return AnalysisReport(
+        repository=repo_path,
+        branch=branch,
+        total_potential_fixes=len(miner.get_fixing_commits()),
+        analyzed_commits=len(potential_fixes),
+        confirmed_bugs=len(confirmed_bugs),
+        results=results,
+        errors=errors
+    )
+
+
+def print_report(report: AnalysisReport, output_format: str = "text"):
+    """Stampa il report nel formato richiesto."""
+
+    if output_format == "json":
+        print(json.dumps(asdict(report), indent=2))
+        return
+
+    # Formato testuale
+    print("\n" + "=" * 60)
+    print("SZZ-LLM ANALYSIS REPORT")
+    print("=" * 60)
+    print(f"Repository: {report.repository}")
+    print(f"Branch: {report.branch}")
+    print(f"Total potential fixes found: {report.total_potential_fixes}")
+    print(f"Commits analyzed: {report.analyzed_commits}")
+    print(f"Confirmed bugs: {report.confirmed_bugs}")
+
+    print("\n" + "-" * 60)
+    print("RESULTS")
+    print("-" * 60)
+
+    for r in report.results:
+        status = "🐛 BUG" if r["is_bug"] else "🔧 REFACTORING"
+        print(f"\n{status} | {r['fix_commit'][:8]}")
+        print(f"  Message: {r['commit_message'][:80]}...")
+
+        if r["is_bug"] and r["bug_inducing_commits"]:
+            print(f"  Bug-inducing commits ({len(r['bug_inducing_commits'])}):")
+            for bic in r["bug_inducing_commits"][:5]:  # Max 5
+                print(f"    - {bic[:12]}")
+            if len(r["bug_inducing_commits"]) > 5:
+                print(f"    ... and {len(r['bug_inducing_commits']) - 5} more")
+
+    if report.errors:
+        print("\n" + "-" * 60)
+        print("ERRORS")
+        print("-" * 60)
+        for err in report.errors:
+            print(f"  ⚠ {err}")
+
+    print("\n" + "=" * 60)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="SZZ-LLM: Bug-inducing commit detection with LLM refinement",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  szz-run ./my-repo                          # Analyze local repository
+  szz-run --url https://github.com/user/repo # Clone and analyze
+  szz-run ./repo --limit 50 --output json    # Analyze 50 commits, JSON output
+  szz-run ./repo --skip-llm                  # Skip LLM refinement
+        """
+    )
+
+    # Positional argument (legacy support)
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Local repository path (optional if --url is provided)"
+    )
+
+    # Repository options
+    parser.add_argument(
+        "--url", "-u",
+        help="Git repository URL to clone and analyze"
+    )
+    parser.add_argument(
+        "--branch", "-b",
+        default="main",
+        help="Branch to analyze (default: main)"
+    )
+
+    # Analysis options
+    parser.add_argument(
+        "--limit", "-l",
+        type=int,
+        default=10,
+        help="Maximum number of commits to analyze (default: 10, 0 = all)"
+    )
+    parser.add_argument(
+        "--model", "-m",
+        default="qwen2.5-coder:7b",
+        help="Ollama model for LLM refinement (default: qwen2.5-coder:7b)"
+    )
+    parser.add_argument(
+        "--skip-llm",
+        action="store_true",
+        help="Skip LLM refinement (faster, but less accurate)"
+    )
+
+    # Output options
+    parser.add_argument(
+        "--output", "-o",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)"
+    )
+    parser.add_argument(
+        "--output-file", "-f",
+        help="Save output to file"
+    )
+
+    args = parser.parse_args()
+
+    # Validation
+    if not args.path and not args.url:
+        parser.error("Either path or --url must be provided")
+
+    # Check git
+    if not check_git_installed():
+        print(json.dumps({"error": "Git is not installed or not in PATH"}) if args.output == "json"
+              else "ERROR: Git is not installed or not in PATH")
+        sys.exit(1)
+
+    # Check Ollama (if LLM is enabled)
+    if not args.skip_llm and not check_ollama_running():
+        print("WARNING: Ollama is not running. LLM refinement will fail.", flush=True)
+        print("Start Ollama or use --skip-llm flag.", flush=True)
+        if args.output == "json":
+            print(json.dumps({"error": "Ollama is not running"}))
+            sys.exit(1)
+
+    # Determine repo path
+    repo_path = args.path
+    cloned = False
+
+    try:
+        if args.url:
+            repo_path = clone_repository(args.url, args.branch)
+            cloned = True
+        elif not os.path.isdir(repo_path):
+            raise ValueError(f"Directory not found: {repo_path}")
+
+        # Run analysis
+        report = run_analysis(
+            repo_path=repo_path,
+            branch=args.branch,
+            limit=args.limit,
+            model=args.model,
+            output_format=args.output,
+            skip_llm=args.skip_llm
+        )
+
+        # Output
+        if args.output_file:
+            with open(args.output_file, "w", encoding="utf-8") as f:
+                if args.output == "json":
+                    json.dump(asdict(report), f, indent=2)
+                else:
+                    # Redirect stdout to file
+                    old_stdout = sys.stdout
+                    sys.stdout = f
+                    print_report(report, args.output)
+                    sys.stdout = old_stdout
+            print(f"Report saved to: {args.output_file}", flush=True)
         else:
-            print(f"  [-] Scartato (Refactoring/Altro)")
+            print_report(report, args.output)
 
-    # 3. Identificazione dei BIC (SZZ Stage 3)
-    print("\nIdentificazione dei commit che hanno introdotto il bug (BIC):")
-    for bug_hash in confirmed_bugs:
-        bics = miner.get_bug_inducing_commits(bug_hash)
-        print(f"Fix Commit: {bug_hash[:8]}")
-        print(f"  -> Sospetti BIC: {bics}")
+    except Exception as e:
+        if args.output == "json":
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"FATAL ERROR: {e}")
+        sys.exit(1)
+
+    finally:
+        # Cleanup cloned repo
+        if cloned and repo_path:
+            print(f"Cleaning up temporary directory...", flush=True)
+            shutil.rmtree(repo_path, ignore_errors=True)
 
 
 if __name__ == "__main__":
