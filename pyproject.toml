@@ -1,5 +1,5 @@
 [project]
-name = "szz-llm-refiner"
+name = "szz-llm-project"
 version = "0.1.0"
 description = ""
 authors = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "szz_llm_refiner", from = "src"}]
+packages = [{include = "szz_llm_project", from = "src"}]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -28,4 +28,4 @@ pytest = "^8.0"      # Per la fase di Testing del corso [cite: 75]
 pytest-cov = "^4.1"  # Per la White Box Testing (Coverage)
 
 [project.scripts]
-szz-run = "szz_project.main:main"
+szz-run = "szz_llm_project.main:main"

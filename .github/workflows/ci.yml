@@ -1,0 +1,30 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        # Garantisce la riproducibilità dell'ambiente citata nelle slide
+        run: poetry install
+
+      - name: Run Unit Tests & Coverage
+        # Automatizza la fase di testing e analisi statica (punto 6 del programma)
+        run: poetry run pytest --cov=src
