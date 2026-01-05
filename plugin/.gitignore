@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+
+# IntelliJ IDEA
+.idea/
+.intellijPlatform/
+*.iml
+out/
+
+# Kotlin
+.kotlin/
+
+# Run configurations (opzionale, puoi tenerle)
+.run/
+
+# Sistema
+.DS_Store
+Thumbs.db

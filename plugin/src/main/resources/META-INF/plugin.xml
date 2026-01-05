@@ -1,0 +1,30 @@
+<idea-plugin>
+    <id>it.unisannio.ingsw2.myplugin</id>
+    <name>MyPyCharmPlugin</name>
+    <vendor url="https://www.unisannio.it">UniSannio</vendor>
+
+    <description><![CDATA[
+        Plugin di esempio: mostra un messaggio e una Tool Window.
+    ]]></description>
+
+    <!-- Dipendenze necessarie -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.python</depends>
+
+    <actions>
+        <action id="SayHelloAction"
+                class="it.unisannio.ingsw2.mypycharmplugin.MyAction"
+                text="Say Hello"
+                description="Mostra un messaggio di prova dal plugin">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                factoryClass="it.unisannio.ingsw2.mypycharmplugin.MyToolWindowFactory"
+                id="My Tool Window"
+                anchor="right"
+                secondary="true"/>
+    </extensions>
+</idea-plugin>
