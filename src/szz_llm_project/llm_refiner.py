@@ -11,11 +11,12 @@ class LLMRefiner:
         Chiede all'LLM se il commit è un vero fix di un bug logico.
         """
         prompt = (
-            f"Analizza questo commit message e il relativo diff di codice.\n"
+            f"Analizza rigorosamente questo commit.\n"
             f"Messaggio: {commit_message}\n"
-            f"Diff: {diff[:2000]}\n\n"  # Limitiamo il diff per non sovraccaricare il modello
-            f"È una correzione di un bug logico o solo un refactoring/estetica?\n"
-            f"Rispondi solo con una parola: 'BUG' o 'REFACTORING'."
+            f"Diff: {diff[:2000]}\n\n"
+            "Un BUG FIX deve correggere un errore logico (es. NullPointerException, calcolo errato).\n"
+            "Se è solo aggiunta di test, documentazione o refactoring, rispondi REFACTORING.\n"
+            "Rispondi SOLO con 'BUG' o 'REFACTORING'."
         )
 
         try:

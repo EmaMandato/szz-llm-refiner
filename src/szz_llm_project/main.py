@@ -18,8 +18,8 @@ def main():
 
     # 2. Refinement con LLM (Analisi Statica Automatica) [cite: 73]
     confirmed_bugs = []
-    print("\nInizio raffinamento con LLM sui primi 5 commit...")
-    for h in potential_fixes[:5]:
+    print("\nInizio raffinamento con LLM sui primi 10 commit...")
+    for h in potential_fixes[:10]:
         msg, diff = miner.get_commit_diff(h)
         print(f"Analizzando {h[:8]}...")
 
