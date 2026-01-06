@@ -1,30 +1,90 @@
 <idea-plugin>
-    <id>it.unisannio.ingsw2.myplugin</id>
-    <name>MyPyCharmPlugin</name>
+    <id>it.unisannio.ingsw2.szz-llm-refiner</id>
+    <name>SZZ-LLM Bug Analyzer</name>
     <vendor url="https://www.unisannio.it">UniSannio</vendor>
+    <version>1.0.0</version>
 
     <description><![CDATA[
-        Plugin di esempio: mostra un messaggio e una Tool Window.
+        <h2>SZZ-LLM Bug Analyzer</h2>
+        <p>Identifies bug-inducing commits in Git repositories using the SZZ algorithm
+        with LLM-based refinement via Ollama.</p>
+
+        <h3>Features:</h3>
+        <ul>
+            <li>Detect fix commits in Git repositories</li>
+            <li>Use LLM (Qwen2.5-Coder) to filter false positives</li>
+            <li>Identify bug-inducing commits via git blame</li>
+            <li>Visualize results in a dedicated tool window</li>
+        </ul>
+
+        <h3>Requirements:</h3>
+        <ul>
+            <li>Python 3.10+ with szz_llm_project installed</li>
+            <li>Ollama running locally (optional, for LLM refinement)</li>
+            <li>Git installed and in PATH</li>
+        </ul>
     ]]></description>
 
-    <!-- Dipendenze necessarie -->
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.python</depends>
 
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Tool Window for SZZ Analysis -->
+        <toolWindow
+                factoryClass="it.unisannio.ingsw2.szzllm.SzzToolWindowFactory"
+                id="SZZ-LLM Analyzer"
+                anchor="bottom"
+                icon="/icons/szz-icon.svg"
+                secondary="false"/>
+
+        <!-- Application-level settings -->
+        <applicationConfigurable
+                parentId="tools"
+                instance="it.unisannio.ingsw2.szzllm.settings.SzzSettingsConfigurable"
+                id="it.unisannio.ingsw2.szzllm.settings"
+                displayName="SZZ-LLM Analyzer"/>
+
+        <!-- Persistent state for settings -->
+        <applicationService
+                serviceInterface="it.unisannio.ingsw2.szzllm.settings.SzzSettings"
+                serviceImplementation="it.unisannio.ingsw2.szzllm.settings.SzzSettings"/>
+
+        <!-- Project-level service for analysis -->
+        <projectService
+                serviceInterface="it.unisannio.ingsw2.szzllm.services.SzzAnalyzerService"
+                serviceImplementation="it.unisannio.ingsw2.szzllm.services.SzzAnalyzerService"/>
+
+        <!-- Notification group -->
+        <notificationGroup id="SZZ-LLM Notifications"
+                           displayType="BALLOON"
+                           isLogByDefault="true"/>
+    </extensions>
+
     <actions>
-        <action id="SayHelloAction"
-                class="it.unisannio.ingsw2.mypycharmplugin.MyAction"
-                text="Say Hello"
-                description="Mostra un messaggio di prova dal plugin">
-            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        <!-- Main action in Tools menu -->
+        <action id="SzzLlm.RunAnalysis"
+                class="it.unisannio.ingsw2.szzllm.actions.SzzRunAction"
+                text="Run SZZ-LLM Analysis"
+                description="Analyze current project for bug-inducing commits"
+                icon="/icons/szz-icon.svg">
+            <add-to-group group-id="ToolsMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt Z"/>
+        </action>
+
+        <!-- Action in VCS menu -->
+        <action id="SzzLlm.AnalyzeFromVcs"
+                class="it.unisannio.ingsw2.szzllm.actions.SzzRunAction"
+                text="Find Bug-Inducing Commits"
+                description="Run SZZ-LLM analysis on this repository">
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+        </action>
+
+        <!-- Context menu action for project view -->
+        <action id="SzzLlm.AnalyzeProject"
+                class="it.unisannio.ingsw2.szzllm.actions.SzzRunAction"
+                text="Analyze with SZZ-LLM"
+                description="Run bug-inducing commit analysis">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
     </actions>
-
-    <extensions defaultExtensionNs="com.intellij">
-        <toolWindow
-                factoryClass="it.unisannio.ingsw2.mypycharmplugin.MyToolWindowFactory"
-                id="My Tool Window"
-                anchor="right"
-                secondary="true"/>
-    </extensions>
 </idea-plugin>
