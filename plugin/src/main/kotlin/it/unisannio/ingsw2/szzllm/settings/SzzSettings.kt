@@ -16,7 +16,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class SzzSettings : PersistentStateComponent<SzzSettings> {
 
     // Python configuration
-    var pythonPath: String = "python"
+    var pythonPath: String = "C:\\Users\\manum\\szz-llm-refiner\\.venv\\Scripts\\python.exe"
 
     // Ollama configuration
     var ollamaUrl: String = "http://localhost:11434"

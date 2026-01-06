@@ -11,6 +11,18 @@ from .miner import GitMiner
 from .llm_refiner import LLMRefiner
 
 
+# Global flag for JSON output mode
+_json_output = False
+
+
+def log(message: str):
+    """Print to stderr if JSON mode, stdout otherwise."""
+    if _json_output:
+        print(message, file=sys.stderr, flush=True)
+    else:
+        print(message, flush=True)
+
+
 @dataclass
 class AnalysisResult:
     """Struttura dati per i risultati dell'analisi."""
@@ -40,7 +52,7 @@ def clone_repository(url: str, branch: str = "main", dest: Optional[str] = None)
     if dest is None:
         dest = tempfile.mkdtemp(prefix="szz_repo_")
 
-    print(f"Cloning {url} (branch: {branch})...", flush=True)
+    log(f"Cloning {url} (branch: {branch})...")
 
     result = subprocess.run(
         ["git", "clone", "--branch", branch, "--single-branch", "--depth", "1000", url, dest],
@@ -50,7 +62,7 @@ def clone_repository(url: str, branch: str = "main", dest: Optional[str] = None)
 
     if result.returncode != 0:
         # Prova senza specificare il branch (usa default)
-        print(f"Branch '{branch}' non trovato, provo con branch default...", flush=True)
+        log(f"Branch '{branch}' non trovato, provo con branch default...")
         shutil.rmtree(dest, ignore_errors=True)
         dest = tempfile.mkdtemp(prefix="szz_repo_")
 
@@ -63,7 +75,7 @@ def clone_repository(url: str, branch: str = "main", dest: Optional[str] = None)
         if result.returncode != 0:
             raise RuntimeError(f"Errore clone: {result.stderr}")
 
-    print(f"Repository clonato in: {dest}", flush=True)
+    log(f"Repository clonato in: {dest}")
     return dest
 
 
@@ -108,9 +120,9 @@ def run_analysis(
     refiner = LLMRefiner(model=model) if not skip_llm else None
 
     # 1. Mining dei fix
-    print("Scanning repository for fix commits...", flush=True)
+    log("Scanning repository for fix commits...")
     potential_fixes = miner.get_fixing_commits()
-    print(f"Found {len(potential_fixes)} potential fix commits.", flush=True)
+    log(f"Found {len(potential_fixes)} potential fix commits.")
 
     if limit > 0:
         potential_fixes = potential_fixes[:limit]
@@ -118,10 +130,10 @@ def run_analysis(
     # 2. Analisi di ogni commit
     confirmed_bugs = []
 
-    print(f"\nAnalyzing {len(potential_fixes)} commits...", flush=True)
+    log(f"Analyzing {len(potential_fixes)} commits...")
 
     for i, commit_hash in enumerate(potential_fixes, 1):
-        print(f"[{i}/{len(potential_fixes)}] Analyzing {commit_hash[:8]}...", flush=True)
+        log(f"[{i}/{len(potential_fixes)}] Analyzing {commit_hash[:8]}...")
 
         try:
             msg, diff = miner.get_commit_diff(commit_hash)
@@ -130,11 +142,11 @@ def run_analysis(
             if refiner and not skip_llm:
                 is_bug = refiner.is_real_bug_fix(msg, diff)
                 status = "BUG" if is_bug else "REFACTORING"
-                print(f"    LLM verdict: {status}", flush=True)
+                log(f"    LLM verdict: {status}")
             else:
                 # Senza LLM, considera tutti come potenziali bug
                 is_bug = True
-                print(f"    Skipped LLM (assuming BUG)", flush=True)
+                log(f"    Skipped LLM (assuming BUG)")
 
             # 3. SZZ per i bug confermati
             bics = []
@@ -142,7 +154,7 @@ def run_analysis(
                 confirmed_bugs.append(commit_hash)
                 bics = miner.get_bug_inducing_commits(commit_hash)
                 if bics:
-                    print(f"    Found {len(bics)} bug-inducing commits", flush=True)
+                    log(f"    Found {len(bics)} bug-inducing commits")
 
             results.append(asdict(AnalysisResult(
                 fix_commit=commit_hash,
@@ -153,7 +165,7 @@ def run_analysis(
 
         except Exception as e:
             error_msg = f"Error analyzing {commit_hash[:8]}: {str(e)}"
-            print(f"    ERROR: {e}", flush=True)
+            log(f"    ERROR: {e}")
             errors.append(error_msg)
 
     return AnalysisReport(
@@ -171,6 +183,7 @@ def print_report(report: AnalysisReport, output_format: str = "text"):
     """Stampa il report nel formato richiesto."""
 
     if output_format == "json":
+        # JSON va su stdout (pulito, senza altri messaggi)
         print(json.dumps(asdict(report), indent=2))
         return
 
@@ -189,8 +202,8 @@ def print_report(report: AnalysisReport, output_format: str = "text"):
     print("-" * 60)
 
     for r in report.results:
-        status = "🐛 BUG" if r["is_bug"] else "🔧 REFACTORING"
-        print(f"\n{status} | {r['fix_commit'][:8]}")
+        status = "BUG" if r["is_bug"] else "REFACTORING"
+        print(f"\n[{status}] {r['fix_commit'][:8]}")
         print(f"  Message: {r['commit_message'][:80]}...")
 
         if r["is_bug"] and r["bug_inducing_commits"]:
@@ -205,12 +218,14 @@ def print_report(report: AnalysisReport, output_format: str = "text"):
         print("ERRORS")
         print("-" * 60)
         for err in report.errors:
-            print(f"  ⚠ {err}")
+            print(f"  ! {err}")
 
     print("\n" + "=" * 60)
 
 
 def main():
+    global _json_output
+
     parser = argparse.ArgumentParser(
         description="SZZ-LLM: Bug-inducing commit detection with LLM refinement",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -274,23 +289,25 @@ Examples:
 
     args = parser.parse_args()
 
+    # Set JSON output mode (affects log() function)
+    _json_output = (args.output == "json")
+
     # Validation
     if not args.path and not args.url:
         parser.error("Either path or --url must be provided")
 
     # Check git
     if not check_git_installed():
-        print(json.dumps({"error": "Git is not installed or not in PATH"}) if args.output == "json"
-              else "ERROR: Git is not installed or not in PATH")
+        if _json_output:
+            print(json.dumps({"status": "error", "error": "Git is not installed or not in PATH"}))
+        else:
+            print("ERROR: Git is not installed or not in PATH")
         sys.exit(1)
 
     # Check Ollama (if LLM is enabled)
     if not args.skip_llm and not check_ollama_running():
-        print("WARNING: Ollama is not running. LLM refinement will fail.", flush=True)
-        print("Start Ollama or use --skip-llm flag.", flush=True)
-        if args.output == "json":
-            print(json.dumps({"error": "Ollama is not running"}))
-            sys.exit(1)
+        log("WARNING: Ollama is not running. LLM refinement will fail.")
+        log("Start Ollama or use --skip-llm flag.")
 
     # Determine repo path
     repo_path = args.path
@@ -324,13 +341,13 @@ Examples:
                     sys.stdout = f
                     print_report(report, args.output)
                     sys.stdout = old_stdout
-            print(f"Report saved to: {args.output_file}", flush=True)
+            log(f"Report saved to: {args.output_file}")
         else:
             print_report(report, args.output)
 
     except Exception as e:
-        if args.output == "json":
-            print(json.dumps({"error": str(e)}))
+        if _json_output:
+            print(json.dumps({"status": "error", "error": str(e)}))
         else:
             print(f"FATAL ERROR: {e}")
         sys.exit(1)
@@ -338,7 +355,7 @@ Examples:
     finally:
         # Cleanup cloned repo
         if cloned and repo_path:
-            print(f"Cleaning up temporary directory...", flush=True)
+            log("Cleaning up temporary directory...")
             shutil.rmtree(repo_path, ignore_errors=True)
 
 

@@ -1,10 +1,15 @@
 import subprocess
+import sys
 from pydriller import Repository
 
 
 class GitMiner:
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
+
+    def _log(self, message: str):
+        """Stampa messaggi di debug su stderr."""
+        print(message, file=sys.stderr, flush=True)
 
     def _run_git(self, *args):
         """Esegue un comando git e restituisce l'output."""
@@ -74,13 +79,13 @@ class GitMiner:
         Identifica i commit che hanno introdotto le linee poi rimosse dal fix.
         """
         bics = set()
-        print(f"  --> Analisi SZZ per {fix_commit_hash[:8]}...")
+        self._log(f"  --> Analisi SZZ per {fix_commit_hash[:8]}...")
 
         try:
             # Ottieni il parent commit (stato prima del fix)
             parent = self._run_git("rev-parse", f"{fix_commit_hash}^")
             if not parent:
-                print(f"      [!] Nessun parent commit trovato")
+                self._log(f"      [!] Nessun parent commit trovato")
                 return []
 
             # Ottieni i file modificati con le linee cambiate
@@ -112,7 +117,7 @@ class GitMiner:
                             if count > 0:  # Solo se ci sono linee rimosse
                                 deleted_line_ranges.append((current_file, start, count))
 
-            print(f"      [Debug] Trovati {len(deleted_line_ranges)} range di linee rimosse")
+            self._log(f"      [Debug] Trovati {len(deleted_line_ranges)} range di linee rimosse")
 
             # Per ogni range di linee rimosse, fai blame sul parent
             for file_path, start_line, count in deleted_line_ranges:
@@ -141,9 +146,9 @@ class GitMiner:
                     continue
 
             if bics:
-                print(f"      Trovati {len(bics)} potenziali BIC")
+                self._log(f"      Trovati {len(bics)} potenziali BIC")
 
         except Exception as e:
-            print(f"      [!] Errore critico SZZ: {e}")
+            self._log(f"      [!] Errore critico SZZ: {e}")
 
         return list(bics)
