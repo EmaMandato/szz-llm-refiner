@@ -1,7 +1,7 @@
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.1.0"
-    id("org.jetbrains.intellij.platform") version "2.2.1"
+    id("org.jetbrains.intellij.platform") version "2.10.5"
 }
 
 group = "it.unisannio.ingsw2"
@@ -37,7 +37,6 @@ tasks {
             <h2>SZZ-LLM Bug Analyzer</h2>
             <p>Identifies bug-inducing commits in Git repositories using the SZZ algorithm
             with LLM-based refinement via Ollama.</p>
-
             <h3>Features:</h3>
             <ul>
                 <li>Detect fix commits in Git repositories</li>
@@ -47,8 +46,10 @@ tasks {
             </ul>
         """.trimIndent())
     }
-
     buildSearchableOptions {
+        enabled = false
+    }
+    instrumentCode {
         enabled = false
     }
 }

@@ -265,7 +265,7 @@ class SzzAnalyzerService(private val project: Project) {
     private fun parseResult(output: String) {
         try {
             // Find the JSON part in the output (it should be at the end)
-            val jsonStart = output.lastIndexOf("{")
+            val jsonStart = output.indexOf("{")
             if (jsonStart == -1) {
                 notifyError("No JSON output found from analysis")
                 return
