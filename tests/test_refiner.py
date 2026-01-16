@@ -7,7 +7,7 @@ from szz_llm_project.llm_refiner import LLMRefiner
 def test_is_real_bug_fix_positive(mock_post):
     """Verifica che il refiner riconosca correttamente un BUG tramite mock."""
     # Simuliamo la risposta di Ollama
-    mock_post.return_value.json.return_value = {"response": "This is a BUG"}
+    mock_post.return_value.json.return_value = {"response": "BUG"}
 
     refiner = LLMRefiner()
     result = refiner.is_real_bug_fix("fix logic error", "diff code...")
@@ -17,7 +17,7 @@ def test_is_real_bug_fix_positive(mock_post):
 @patch('requests.post')
 def test_is_real_bug_fix_negative(mock_post):
     """Verifica che il refiner riconosca un REFACTORING."""
-    mock_post.return_value.json.return_value = {"response": "Just a REFACTORING"}
+    mock_post.return_value.json.return_value = {"response": "REFACTORING"}
 
     refiner = LLMRefiner()
     result = refiner.is_real_bug_fix("update comments", "diff code...")
