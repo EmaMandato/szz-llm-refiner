@@ -126,9 +126,18 @@ class SzzAnalyzerService(private val project: Project) {
         // Build command line
         val commandLine = GeneralCommandLine().apply {
             exePath = pythonPath
+            addParameter("-u")
             addParameter("-m")
             addParameter("szz_llm_project.main")
-            addParameter(config.repoPath)
+
+            // Use URL or local path
+            if (!config.repoUrl.isNullOrBlank()) {
+                addParameter("--url")
+                addParameter(config.repoUrl)
+            } else {
+                addParameter(config.repoPath)
+            }
+
             addParameter("--branch")
             addParameter(config.branch)
             addParameter("--limit")
@@ -144,11 +153,21 @@ class SzzAnalyzerService(private val project: Project) {
             }
 
             charset = StandardCharsets.UTF_8
-            workDirectory = File(config.repoPath)
+
+            // Set work directory only for local repos
+            if (config.repoUrl.isNullOrBlank() && config.repoPath.isNotBlank()) {
+                workDirectory = File(config.repoPath)
+            }
+        }
+
+        val targetDescription = if (!config.repoUrl.isNullOrBlank()) {
+            config.repoUrl
+        } else {
+            config.repoPath
         }
 
         log.info("Executing: ${commandLine.commandLineString}")
-        indicator.text = "Running analysis on ${config.repoPath}..."
+        indicator.text = "Running analysis on $targetDescription..."
 
         val outputBuffer = StringBuilder()
         val errorBuffer = StringBuilder()
@@ -157,30 +176,47 @@ class SzzAnalyzerService(private val project: Project) {
         val processHandler = OSProcessHandler(commandLine)
         currentProcess.set(processHandler)
 
+        // Variabili locali per evitare spam di aggiornamenti identici
+        var lastPercentage = -1
+
         processHandler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                 val text = event.text.trim()
                 if (text.isEmpty()) return
 
+                // Funzione helper locale
+                fun tryUpdateProgress(line: String) {
+                    // 1. Invia sempre la riga raw al log (per il tab Output Log)
+                    analysisListeners.forEach { it.onOutputLine(line) }
+
+                    // 2. Parsa la riga per cercare info di progresso (es. [1/10])
+                    parseProgressFromOutput(line)?.let { progress ->
+
+                        // Aggiorna solo se c'è una novità vera (messaggio o percentuale diversi)
+                        if (progress.message != lastProgressMessage || progress.percentage != lastPercentage) {
+                            lastProgressMessage = progress.message
+                            lastPercentage = progress.percentage
+
+                            // Aggiorna l'indicatore della task in background di IntelliJ
+                            indicator.text = progress.message
+                            indicator.fraction = progress.percentage / 100.0
+
+                            // Notifica la UI (che aggiornerà la sua progressBar)
+                            notifyProgress(progress)
+                        }
+                    }
+                }
+
                 when (outputType) {
                     ProcessOutputTypes.STDOUT -> {
                         outputBuffer.append(event.text)
-                        // Notify listeners about output
-                        analysisListeners.forEach { it.onOutputLine(text) }
-
-                        // Parse progress from stdout
-                        parseProgressFromOutput(text)?.let { progress ->
-                            if (progress.message != lastProgressMessage) {
-                                lastProgressMessage = progress.message
-                                indicator.text = progress.message
-                                indicator.fraction = progress.percentage / 100.0
-                                notifyProgress(progress)
-                            }
-                        }
+                        // ORA ascoltiamo anche STDOUT per il progresso!
+                        tryUpdateProgress(text)
                     }
                     ProcessOutputTypes.STDERR -> {
                         errorBuffer.append(event.text)
-                        log.warn("SZZ stderr: $text")
+                        // Ascoltiamo anche STDERR
+                        tryUpdateProgress(text)
                     }
                 }
             }
@@ -189,18 +225,12 @@ class SzzAnalyzerService(private val project: Project) {
                 val exitCode = event.exitCode
                 log.info("SZZ process terminated with exit code: $exitCode")
 
-                if (indicator.isCanceled) {
-                    return
-                }
+                if (indicator.isCanceled) return
 
                 if (exitCode == 0) {
                     parseResult(outputBuffer.toString())
                 } else {
-                    val errorMsg = if (errorBuffer.isNotEmpty()) {
-                        errorBuffer.toString()
-                    } else {
-                        "Process exited with code $exitCode"
-                    }
+                    val errorMsg = if (errorBuffer.isNotEmpty()) errorBuffer.toString() else "Process exited with code $exitCode"
                     notifyError(errorMsg)
                 }
             }
@@ -264,47 +294,70 @@ class SzzAnalyzerService(private val project: Project) {
 
     private fun parseResult(output: String) {
         try {
-            // Find the JSON part in the output (it should be at the end)
+            // 1. Trova l'inizio e la fine esatta del JSON per evitare testo sporco in coda
             val jsonStart = output.indexOf("{")
-            if (jsonStart == -1) {
-                notifyError("No JSON output found from analysis")
+            val jsonEnd = output.lastIndexOf("}")
+
+            if (jsonStart == -1 || jsonEnd == -1 || jsonEnd < jsonStart) {
+                notifyError("No valid JSON output found from analysis")
+                // Utile per il debug: stampa cosa ha ricevuto davvero
+                log.warn("Received invalid output: $output")
                 return
             }
 
-            val jsonContent = output.substring(jsonStart)
+            // Estrae SOLO il blocco JSON, ignorando tutto ciò che c'è prima o dopo
+            val jsonContent = output.substring(jsonStart, jsonEnd + 1)
 
-            // Try to parse as error first
+            // 2. Usa JsonReader con lenient = true per evitare MalformedJsonException
+            val reader = com.google.gson.stream.JsonReader(java.io.StringReader(jsonContent))
+            reader.isLenient = true
+
+            // Parsing: prova prima a leggere come Report
             try {
-                val error = gson.fromJson(jsonContent, AnalysisError::class.java)
-                if (error.error != null) {
-                    notifyError(error.error)
-                    return
+                val report = gson.fromJson<AnalysisReport>(reader, AnalysisReport::class.java)
+
+                // Controllo di sicurezza: se il report è vuoto o nullo
+                if (report == null) {
+                    throw Exception("Parsed report is null")
                 }
-            } catch (e: JsonSyntaxException) {
-                // Not an error, continue parsing as report
+
+                currentReport.set(report)
+
+                notifyProgress(AnalysisProgress(
+                    status = AnalysisStatus.COMPLETED,
+                    message = "Analysis completed: ${report.confirmedBugs} bugs found in ${report.analyzedCommits} commits",
+                    percentage = 100
+                ))
+
+                analysisListeners.forEach { it.onAnalysisComplete(report) }
+
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup("SZZ-LLM Notifications")
+                    .createNotification(
+                        "SZZ-LLM Analysis Complete",
+                        "Found ${report.confirmedBugs} confirmed bugs in ${report.analyzedCommits} commits analyzed",
+                        NotificationType.INFORMATION
+                    )
+                    .notify(project)
+
+            } catch (e: Exception) {
+                // Se fallisce come Report, proviamo a vedere se era un oggetto Errore
+                // Ricreiamo il reader perché il precedente è stato consumato
+                val errorReader = com.google.gson.stream.JsonReader(java.io.StringReader(jsonContent))
+                errorReader.isLenient = true
+
+                try {
+                    val errorObj = gson.fromJson<AnalysisError>(errorReader, AnalysisError::class.java)
+                    if (errorObj != null && !errorObj.error.isNullOrEmpty()) {
+                        notifyError(errorObj.error)
+                        return
+                    }
+                } catch (ignored: Exception) {
+                    // Non era nemmeno un errore JSON standard
+                }
+                // Rilancia l'eccezione originale se non era un errore gestito
+                throw e
             }
-
-            // Parse as analysis report
-            val report = gson.fromJson(jsonContent, AnalysisReport::class.java)
-            currentReport.set(report)
-
-            notifyProgress(AnalysisProgress(
-                status = AnalysisStatus.COMPLETED,
-                message = "Analysis completed: ${report.confirmedBugs} bugs found in ${report.analyzedCommits} commits",
-                percentage = 100
-            ))
-
-            analysisListeners.forEach { it.onAnalysisComplete(report) }
-
-            // Show notification
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup("SZZ-LLM Notifications")
-                .createNotification(
-                    "SZZ-LLM Analysis Complete",
-                    "Found ${report.confirmedBugs} confirmed bugs in ${report.analyzedCommits} commits analyzed",
-                    NotificationType.INFORMATION
-                )
-                .notify(project)
 
         } catch (e: Exception) {
             log.error("Failed to parse analysis result", e)

@@ -2,8 +2,8 @@ package it.unisannio.ingsw2.szzllm.ui
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.*
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.ui.JBColor
 import com.intellij.ui.JBSplitter
@@ -11,12 +11,14 @@ import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import it.unisannio.ingsw2.szzllm.model.*
 import it.unisannio.ingsw2.szzllm.services.SzzAnalyzerService
-import it.unisannio.ingsw2.szzllm.settings.SzzSettings
 import java.awt.*
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import javax.swing.*
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.DefaultTableCellRenderer
@@ -45,8 +47,30 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
         font = Font(Font.MONOSPACED, Font.PLAIN, 11)
     }
 
+    // Repository source selection
+    private val sourceComboBox = JComboBox(arrayOf("Current Project", "Remote URL")).apply {
+        preferredSize = Dimension(130, preferredSize.height)
+    }
+    private val urlField = JBTextField().apply {
+        emptyText.text = "https://github.com/user/repo"
+        preferredSize = Dimension(300, preferredSize.height)
+        isEnabled = false
+    }
+
+    // Branch selection with refresh
+    private val branchComboBox = JComboBox<String>().apply {
+        isEditable = true  // Allow manual input if needed
+        preferredSize = Dimension(150, preferredSize.height)
+        addItem("main")
+        addItem("master")
+    }
+    private val refreshBranchButton = JButton(AllIcons.Actions.Refresh).apply {
+        toolTipText = "Fetch branches from repository"
+        preferredSize = Dimension(28, 28)
+        isFocusable = false
+    }
+
     // Config components
-    private val branchField = JTextField("main", 15)
     private val limitSpinner = JSpinner(SpinnerNumberModel(10, 1, 1000, 1))
     private val skipLlmCheckbox = JCheckBox("Skip LLM refinement")
 
@@ -105,16 +129,43 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
     }
 
     private fun createConfigPanel(): JPanel {
-        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 10, 5))
+        val panel = JPanel()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
         panel.border = JBUI.Borders.empty(5, 10)
 
-        panel.add(JBLabel("Branch:"))
-        panel.add(branchField)
+        // Row 1: Repository source selection
+        val sourcePanel = JPanel(FlowLayout(FlowLayout.LEFT, 10, 5))
+        sourcePanel.add(JBLabel("Repository:"))
+        sourcePanel.add(sourceComboBox)
+        sourcePanel.add(urlField)
 
-        panel.add(JBLabel("Limit:"))
-        panel.add(limitSpinner)
+        // Enable/disable URL field based on selection
+        sourceComboBox.addActionListener {
+            val isRemote = sourceComboBox.selectedIndex == 1
+            urlField.isEnabled = isRemote
+            if (!isRemote) {
+                urlField.text = ""
+            }
+        }
 
-        panel.add(skipLlmCheckbox)
+        panel.add(sourcePanel)
+
+        // Row 2: Branch and analysis options
+        val optionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 10, 5))
+        optionsPanel.add(JBLabel("Branch:"))
+        optionsPanel.add(branchComboBox)
+        optionsPanel.add(refreshBranchButton)
+        optionsPanel.add(Box.createHorizontalStrut(10))
+        optionsPanel.add(JBLabel("Limit:"))
+        optionsPanel.add(limitSpinner)
+        optionsPanel.add(skipLlmCheckbox)
+
+        // Refresh button action
+        refreshBranchButton.addActionListener {
+            fetchBranches()
+        }
+
+        panel.add(optionsPanel)
 
         return panel
     }
@@ -130,6 +181,111 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
         panel.add(progressBar, BorderLayout.CENTER)
 
         return panel
+    }
+
+    private fun fetchBranches() {
+        val isRemote = sourceComboBox.selectedIndex == 1
+
+        // Disable button during fetch
+        refreshBranchButton.isEnabled = false
+        statusLabel.text = "Fetching branches..."
+        statusLabel.foreground = JBColor.foreground()
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val branches = if (isRemote) {
+                    val url = urlField.text.trim()
+                    if (url.isEmpty()) {
+                        throw IllegalArgumentException("Please enter a repository URL first")
+                    }
+                    fetchRemoteBranches(url)
+                } else {
+                    val basePath = project.basePath
+                        ?: throw IllegalArgumentException("No project path")
+                    fetchLocalBranches(basePath)
+                }
+
+                SwingUtilities.invokeLater {
+                    branchComboBox.removeAllItems()
+                    branches.forEach { branchComboBox.addItem(it) }
+
+                    // Select main or master if available
+                    val defaultBranch = branches.find { it == "main" || it == "master" }
+                    if (defaultBranch != null) {
+                        branchComboBox.selectedItem = defaultBranch
+                    } else if (branches.isNotEmpty()) {
+                        branchComboBox.selectedIndex = 0
+                    }
+
+                    statusLabel.text = "Found ${branches.size} branches"
+                    statusLabel.foreground = JBColor(Color(0, 128, 0), Color(100, 200, 100))
+                    refreshBranchButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    statusLabel.text = "Error: ${e.message}"
+                    statusLabel.foreground = JBColor.RED
+                    refreshBranchButton.isEnabled = true
+                }
+            }
+        }
+    }
+
+    private fun fetchLocalBranches(repoPath: String): List<String> {
+        val process = ProcessBuilder("git", "-C", repoPath, "branch", "-a")
+            .redirectErrorStream(true)
+            .start()
+
+        val branches = mutableListOf<String>()
+        BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+            reader.lineSequence().forEach { line ->
+                // Parse branch names, remove markers like * and remotes/origin/
+                var branch = line.trim()
+                    .removePrefix("* ")
+                    .removePrefix("remotes/origin/")
+                    .trim()
+
+                // Skip HEAD references
+                if (!branch.contains("HEAD") && branch.isNotEmpty()) {
+                    // Normalize: take only the branch name
+                    if (branch.contains("/")) {
+                        branch = branch.substringAfterLast("/")
+                    }
+                    if (branch !in branches) {
+                        branches.add(branch)
+                    }
+                }
+            }
+        }
+
+        process.waitFor()
+        return branches.sorted()
+    }
+
+    private fun fetchRemoteBranches(url: String): List<String> {
+        val process = ProcessBuilder("git", "ls-remote", "--heads", url)
+            .redirectErrorStream(true)
+            .start()
+
+        val branches = mutableListOf<String>()
+        BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+            reader.lineSequence().forEach { line ->
+                // Format: <hash>\trefs/heads/<branch>
+                if (line.contains("refs/heads/")) {
+                    val branch = line.substringAfter("refs/heads/").trim()
+                    if (branch.isNotEmpty()) {
+                        branches.add(branch)
+                    }
+                }
+            }
+        }
+
+        val exitCode = process.waitFor()
+        if (exitCode != 0 || branches.isEmpty()) {
+            throw RuntimeException("Failed to fetch branches. Check URL and network connection.")
+        }
+
+        return branches.sorted()
     }
 
     private fun setupTable() {
@@ -262,7 +418,7 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
 
     private fun buildSummaryText(report: AnalysisReport): String {
         return buildString {
-            appendLine("=" .repeat(50))
+            appendLine("=".repeat(50))
             appendLine("SZZ-LLM ANALYSIS SUMMARY")
             appendLine("=".repeat(50))
             appendLine()
@@ -289,9 +445,52 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
     }
 
     private fun runAnalysis() {
-        val basePath = project.basePath
-        if (basePath == null) {
-            statusLabel.text = "Error: No project path"
+        val isRemote = sourceComboBox.selectedIndex == 1
+
+        val repoPath: String
+        val repoUrl: String?
+
+        if (isRemote) {
+            // Remote URL mode
+            val url = urlField.text.trim()
+            if (url.isEmpty()) {
+                statusLabel.text = "Error: Please enter a repository URL"
+                statusLabel.foreground = JBColor.RED
+                return
+            }
+            if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("git@")) {
+                statusLabel.text = "Error: Invalid URL format"
+                statusLabel.foreground = JBColor.RED
+                return
+            }
+            repoPath = ""
+            repoUrl = url
+        } else {
+            // Current project mode
+            val basePath = project.basePath
+            if (basePath == null) {
+                statusLabel.text = "Error: No project path"
+                statusLabel.foreground = JBColor.RED
+                return
+            }
+
+            // Check if .git exists
+            val gitDir = java.io.File(basePath, ".git")
+            if (!gitDir.exists()) {
+                statusLabel.text = "Error: Current project is not a Git repository"
+                statusLabel.foreground = JBColor.RED
+                return
+            }
+
+            repoPath = basePath
+            repoUrl = null
+        }
+
+        // Get selected branch
+        val selectedBranch = branchComboBox.selectedItem?.toString()?.trim() ?: "main"
+        if (selectedBranch.isEmpty()) {
+            statusLabel.text = "Error: Please select a branch"
+            statusLabel.foreground = JBColor.RED
             return
         }
 
@@ -300,8 +499,9 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
         detailsArea.text = ""
 
         val config = AnalysisConfig(
-            repoPath = basePath,
-            branch = branchField.text,
+            repoPath = repoPath,
+            repoUrl = repoUrl,
+            branch = selectedBranch,
             limit = limitSpinner.value as Int,
             skipLlm = skipLlmCheckbox.isSelected
         )
@@ -312,7 +512,7 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
     // Action classes
     private inner class RunAnalysisAction : AnAction(
         "Run Analysis",
-        "Start SZZ-LLM analysis on current project",
+        "Start SZZ-LLM analysis",
         AllIcons.Actions.Execute
     ) {
         override fun actionPerformed(e: AnActionEvent) {

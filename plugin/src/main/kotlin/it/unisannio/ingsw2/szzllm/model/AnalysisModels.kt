@@ -32,14 +32,16 @@ data class AnalysisReport(
 )
 
 data class AnalysisError(
-    val error: String
+    val status: String? = null,
+    val error: String? = null
 )
 
 /**
  * Configuration for running the analysis
  */
 data class AnalysisConfig(
-    val repoPath: String,
+    val repoPath: String = "",
+    val repoUrl: String? = null,
     val branch: String = "main",
     val limit: Int = 10,
     val model: String = "qwen2.5-coder:7b",

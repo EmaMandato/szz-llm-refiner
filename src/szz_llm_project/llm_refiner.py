@@ -19,14 +19,28 @@ class LLMRefiner:
             "Rispondi SOLO con 'BUG' o 'REFACTORING'."
         )
 
+
         try:
-            response = requests.post(self.url, json={
+            # Configurazione per rendere l'output deterministico
+            payload = {
                 "model": self.model,
                 "prompt": prompt,
-                "stream": False
-            }, timeout=30)
-            result = response.json().get("response", "").upper()
-            return "BUG" in result
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,  # Forza il modello a scegliere sempre la parola più probabile
+                    "num_predict": 5,    # Limita la lunghezza della risposta (ci serve solo una parola)
+                    "seed": 42           # Un seed fisso aiuta ulteriormente la riproducibilità
+                }
+            }
+
+            response = requests.post(self.url, json=payload, timeout=30)
+            # Converte la risposta in maiuscolo per il confronto
+            result = response.json().get("response", "").upper().strip()
+
+            # Restituisce True solo se la risposta inizia esattamente con BUG
+            return result.startswith("BUG")
+
         except Exception as e:
+            # In caso di errore (es. Ollama spento), restituisce False per default
             print(f"Errore LLM: {e}")
             return False
