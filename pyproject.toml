@@ -26,6 +26,7 @@ pydantic = "^2.0"    # Per la validazione dei dati
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"      # Per la fase di Testing del corso [cite: 75]
 pytest-cov = "^4.1"  # Per la White Box Testing (Coverage)
+pytest-mock = "^3.15"
 
 [project.scripts]
 szz-run = "szz_llm_project.main:main"
