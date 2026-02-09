@@ -8,9 +8,10 @@
 4. [Build Automation](#4-build-automation)
 5. [Flusso di Lavoro](#5-flusso-di-lavoro)
 6. [Testing](#6-testing)
-7. [CI/CD Pipeline](#7-cicd-pipeline)
-8. [Tecnologie Utilizzate](#8-tecnologie-utilizzate)
-9. [Configurazione](#9-configurazione)
+7. [Datasets e Validazione](#7-datasets-e-validazione)
+8. [CI/CD Pipeline](#8-cicd-pipeline)
+9. [Tecnologie Utilizzate](#9-tecnologie-utilizzate)
+10. [Configurazione](#10-configurazione)
 
 ---
 
@@ -30,6 +31,10 @@ Il progetto è stato sviluppato come parte del corso di **Ingegneria del Softwar
 - Estrazione di fixing commits tramite keyword matching
 - Implementazione dell'algoritmo SZZ con git blame
 - Filtraggio dei falsi positivi tramite LLM
+- Sistema di filtri multi-livello (messaggi, modifiche cosmetiche, blacklist)
+- Selezione commit per range di date o tag
+- Sistema di validazione con dataset benchmark (Defects4J, ICSE2021)
+- Calcolo metriche (Precision, Recall, F1, Accuracy)
 - Output in formato JSON/text
 - Plugin PyCharm per integrazione IDE
 
@@ -42,6 +47,20 @@ szz-llm-refiner/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                 # Pipeline CI GitHub Actions
+│
+├── datasets/                      # Dataset di benchmark per validazione
+│   ├── defects4j-bugs.json        # Dataset Defects4J (395 bug Java)
+│   ├── icse2021-overall.json      # Dataset ICSE 2021 completo
+│   ├── icse2021-java.json         # Subset Java ICSE 2021
+│   ├── icse2021_ground_truth.csv  # Ground truth estratto
+│   └── icse2021_repos.txt         # Lista repository ICSE 2021
+│
+├── examples/                      # Esempi di configurazione
+│   ├── sample_ground_truth.csv    # Esempio formato CSV
+│   └── sample_ground_truth.json   # Esempio formato JSON
+│
+├── scripts/                       # Script di utilità
+│   └── convert_datasets.py        # Conversione dataset benchmark
 │
 ├── plugin/                        # Plugin PyCharm (Kotlin)
 │   ├── src/main/kotlin/
@@ -64,9 +83,10 @@ szz-llm-refiner/
 ├── src/
 │   └── szz_llm_project/           # Engine Python (CLI)
 │       ├── __init__.py
-│       ├── main.py                # Entry point CLI
-│       ├── miner.py               # Modulo Git mining
-│       └── llm_refiner.py         # Modulo LLM refinement
+│       ├── main.py                # Entry point CLI e orchestrazione
+│       ├── miner.py               # Modulo Git mining e filtri
+│       ├── llm_refiner.py         # Modulo LLM refinement
+│       └── validator.py           # Modulo validazione con ground truth
 │
 ├── tests/                         # Test suite
 │   ├── test_miner.py              # Test base GitMiner
@@ -76,6 +96,8 @@ szz-llm-refiner/
 │
 ├── pyproject.toml                 # Configurazione Poetry
 ├── poetry.lock                    # Lock delle dipendenze
+├── sbom.json                      # Software Bill of Materials (SBOM)
+├── ARCHITECTURE.md                # Documentazione architetturale
 ├── README.md                      # Documentazione progetto
 └── LICENSE
 ```
@@ -147,7 +169,15 @@ Il progetto è strutturato su **due livelli**:
 | `--limit`, `-l` | Max commit da analizzare | 10 |
 | `--model`, `-m` | Modello Ollama | qwen2.5-coder:7b |
 | `--output`, `-o` | Formato output (text/json) | text |
+| `--output-file`, `-f` | Salva output su file | - |
 | `--skip-llm` | Salta raffinamento LLM | false |
+| `--since` | Analizza commit dopo questa data (YYYY-MM-DD) | - |
+| `--until` | Analizza commit prima di questa data (YYYY-MM-DD) | - |
+| `--from-tag` | Tag di partenza per range analisi | - |
+| `--to-tag` | Tag di arrivo per range analisi | - |
+| `--list-tags` | Mostra tag disponibili ed esci | false |
+| `--validate` | Esegue validazione contro ground truth (CSV/JSON) | - |
+| `--validation-limit` | Max campioni da validare | 0 (tutti) |
 
 #### `miner.py` - Git Mining e Algoritmo SZZ
 
@@ -162,15 +192,38 @@ Il progetto è strutturato su **due livelli**:
 
 | Metodo | Descrizione |
 |--------|-------------|
-| `get_fixing_commits()` | Identifica fix commits via keyword matching |
+| `get_fixing_commits(since, until, from_tag, to_tag)` | Identifica fix commits via keyword matching con filtri |
 | `get_commit_diff(hash)` | Estrae messaggio e diff completo |
-| `get_bug_inducing_commits(fix_commit)` | Traccia bug-inducing via git blame |
+| `get_bug_inducing_commits(fix_commit, blacklist)` | Traccia bug-inducing via git blame con filtri |
 | `get_fix_details(hash)` | Estrae file modificati e righe eliminate |
+| `get_tags()` | Restituisce lista tag con data e hash |
+| `get_commits_between_tags(from_tag, to_tag)` | Commit in un range di tag |
+| `get_commits_between_dates(since, until)` | Commit in un range di date |
+| `should_skip_by_message(msg)` | Pre-filtro veloce basato su keyword |
+| `is_cosmetic_change(hash)` | Rileva modifiche solo cosmetiche (rename, commenti, whitespace) |
+| `get_commit_message(hash)` | Restituisce solo il messaggio di un commit |
+
+**Sistema di Filtri:**
+
+Il miner implementa un sistema di filtri a più livelli per ridurre i falsi positivi:
+
+1. **Pre-filtro messaggi** (`should_skip_by_message`):
+   - Scarta commit con keyword: `refactor`, `style`, `docs`, `chore`, `typo`, `rename`, `whitespace`, `cleanup`, `lint`
+
+2. **Filtro modifiche cosmetiche** (`is_cosmetic_change`):
+   - Rileva rinomina di variabili (stessa struttura, nomi diversi)
+   - Rileva modifiche solo ai commenti
+   - Rileva modifiche solo di whitespace/formattazione
+
+3. **Blacklist dinamica**:
+   - I commit scartati come refactoring vengono aggiunti alla blacklist
+   - I BIC trovati che matchano la blacklist vengono filtrati
 
 **Algoritmo SZZ:**
 1. Usa `git diff` con `unified=0` per identificare righe eliminate
 2. Per ogni range di righe eliminate, esegue `git blame` per trovare il commit introduttore
-3. Restituisce set unico di hash commit bug-inducing
+3. Applica filtri sui BIC trovati (blacklist, messaggio, modifiche cosmetiche)
+4. Restituisce set filtrato di hash commit bug-inducing
 
 #### `llm_refiner.py` - Raffinamento LLM
 
@@ -186,6 +239,58 @@ Il progetto è strutturato su **due livelli**:
 **Integrazione:**
 - Comunica con Ollama HTTP API a `http://localhost:11434/api/generate`
 - Invia prompt chiedendo classificazione "BUG" o "REFACTORING"
+
+#### `validator.py` - Sistema di Validazione
+
+**Classe:** `ValidationMetrics`, `ValidationResult`
+
+**Responsabilità:**
+- Calcolo metriche di validazione (Precision, Recall, F1, Accuracy)
+- Caricamento ground truth da file CSV e JSON
+- Supporto per diversi formati di dataset (Defects4J, ICSE2021, LLM4SZZ)
+- Esecuzione validazione automatizzata contro dataset etichettati
+
+**Data Classes:**
+
+| Classe | Descrizione |
+|--------|-------------|
+| `ValidationMetrics` | Contiene TP, TN, FP, FN, precision, recall, F1, accuracy |
+| `ValidationResult` | Risultato singola validazione (commit, ground truth, prediction) |
+
+**Funzioni principali:**
+
+| Funzione | Descrizione |
+|----------|-------------|
+| `load_ground_truth(file)` | Carica ground truth auto-detectando formato (CSV/JSON) |
+| `load_ground_truth_csv(file)` | Carica da CSV (colonne: commit_hash, is_bug) |
+| `load_ground_truth_json(file)` | Carica da JSON (supporta Defects4J, ICSE2021, LLM4SZZ) |
+| `run_validation(repo, gt_file, model)` | Esegue validazione completa |
+| `calculate_metrics(results)` | Calcola metriche da lista di risultati |
+| `print_validation_report(metrics, results)` | Stampa report formattato |
+
+**Formati Ground Truth supportati:**
+
+1. **CSV semplice:**
+   ```csv
+   commit_hash,is_bug
+   abc123,true
+   def456,false
+   ```
+
+2. **JSON semplice:**
+   ```json
+   {"commits": [{"hash": "abc", "is_bug": true}]}
+   ```
+
+3. **Defects4J:**
+   ```json
+   [{"bugId": "Chart-1", "project": "Chart", ...}]
+   ```
+
+4. **ICSE2021/LLM4SZZ:**
+   ```json
+   [{"fix_commit": "abc", "is_bug_fix": true}]
+   ```
 
 ### 3.3 Plugin PyCharm (Kotlin)
 
@@ -599,9 +704,95 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 
 ---
 
-## 7. CI/CD Pipeline
+## 7. Datasets e Validazione
 
-### GitHub Actions
+### 7.1 Dataset Disponibili
+
+Il progetto include dataset pubblici per la validazione dell'algoritmo SZZ-LLM:
+
+| Dataset | File | Descrizione | Campioni |
+|---------|------|-------------|----------|
+| **Defects4J** | `defects4j-bugs.json` | Bug reali da progetti Java open-source | 395 |
+| **ICSE 2021** | `icse2021-overall.json` | Dataset completo paper ICSE 2021 SZZ evaluation | ~1900 |
+| **ICSE 2021 Java** | `icse2021-java.json` | Subset solo progetti Java | - |
+
+### 7.2 Struttura Dataset
+
+**Defects4J:**
+- Contiene SOLO bug confermati (utile per testare recall, non precision)
+- Campi: `bugId`, `project`, `diff`, `failingTests`
+- Progetti: Chart, Closure, Lang, Math, Mockito, Time
+
+**ICSE 2021:**
+- Fix commits etichettati manualmente con BIC associati
+- Campi: `repository`, `fix.commit.hash`, `fix.commit.message`, `bug_inducing_commits`
+- Include 1625 repository GitHub unici
+
+### 7.3 Script di Conversione
+
+Lo script `scripts/convert_datasets.py` converte i dataset nel formato di validazione:
+
+```bash
+# Converti Defects4J
+python scripts/convert_datasets.py defects4j datasets/defects4j-bugs.json -o ground_truth.csv
+
+# Converti ICSE 2021
+python scripts/convert_datasets.py icse2021 datasets/icse2021-overall.json -o ground_truth.csv
+
+# Estrai lista repository
+python scripts/convert_datasets.py repos datasets/icse2021-overall.json -o repos.txt
+```
+
+### 7.4 Esecuzione Validazione
+
+```bash
+# Validazione base
+szz-run ./repo --validate ground_truth.csv
+
+# Con limite campioni
+szz-run ./repo --validate defects4j.json --validation-limit 50
+
+# Output JSON
+szz-run ./repo --validate ground_truth.csv --output json
+```
+
+### 7.5 Metriche Calcolate
+
+| Metrica | Formula | Descrizione |
+|---------|---------|-------------|
+| **Precision** | TP / (TP + FP) | % di predizioni BUG che sono corrette |
+| **Recall** | TP / (TP + FN) | % di bug reali identificati |
+| **F1 Score** | 2 × (P × R) / (P + R) | Media armonica di precision e recall |
+| **Accuracy** | (TP + TN) / Total | % di predizioni corrette totali |
+
+### 7.6 Esempio Output Validazione
+
+```
+============================================================
+VALIDATION REPORT
+============================================================
+
+Total samples validated: 100
+
+Confusion Matrix:
+                    Predicted
+                  BUG     REF
+  Actual BUG       72       8
+  Actual REF        5      15
+
+Metrics:
+  Precision: 93.51%
+  Recall:    90.00%
+  F1 Score:  91.72%
+  Accuracy:  87.00%
+============================================================
+```
+
+---
+
+## 8. CI/CD Pipeline
+
+### 8.1 GitHub Actions
 
 **File:** `.github/workflows/ci.yml`
 **Trigger:** Push su main e pull request
@@ -624,9 +815,9 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 
 ---
 
-## 8. Tecnologie Utilizzate
+## 9. Tecnologie Utilizzate
 
-### 8.1 Stack Python
+### 9.1 Stack Python
 
 | Componente | Tecnologia | Versione |
 |------------|-----------|----------|
@@ -639,7 +830,7 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 | Coverage | pytest-cov | 4.1+ |
 | Mocking | pytest-mock | 3.15+ |
 
-### 8.2 Stack Plugin
+### 9.2 Stack Plugin
 
 | Componente | Tecnologia | Versione |
 |------------|-----------|----------|
@@ -651,7 +842,7 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 | JSON Parsing | Gson | 2.10.1 |
 | UI Framework | IntelliJ Swing | Platform SDK |
 
-### 8.3 Servizi Esterni
+### 9.3 Servizi Esterni
 
 - **Git**: Operazioni command-line per analisi repository
 - **Ollama**: Server inferenza LLM locale (qwen2.5-coder:7b)
@@ -659,9 +850,9 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 
 ---
 
-## 9. Configurazione
+## 10. Configurazione
 
-### 9.1 File di Configurazione
+### 10.1 File di Configurazione
 
 | File | Scopo |
 |------|-------|
@@ -673,7 +864,7 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 | `.github/workflows/ci.yml` | Pipeline CI GitHub Actions |
 | `gradle.properties` | Ottimizzazioni Gradle |
 
-### 9.2 Entry Points
+### 10.2 Entry Points
 
 #### CLI Python
 
@@ -697,7 +888,7 @@ szz-run ./repo --limit 50 --output json --skip-llm
 - **Tool Window**: "SZZ-LLM Analyzer" (pannello bottom)
 - **Settings**: IDE Settings → Tools → SZZ-LLM Analyzer
 
-### 9.3 Requisiti Sistema
+### 10.3 Requisiti Sistema
 
 **Python Engine:**
 - Python 3.10+
@@ -715,12 +906,13 @@ szz-run ./repo --limit 50 --output json --skip-llm
 
 | Metrica | Valore |
 |---------|--------|
-| File sorgente Python | 3 |
+| File sorgente Python | 4 |
 | File sorgente Kotlin | 7 |
 | File test | 4 |
 | Test totali | 36 |
 | Coverage | 88% |
-| Dimensione sorgenti Python | ~60 KB |
+| Dataset campioni | ~2300 |
+| Dimensione sorgenti Python | ~80 KB |
 | Dimensione test | ~25 KB |
 
 ---
@@ -728,9 +920,10 @@ szz-run ./repo --limit 50 --output json --skip-llm
 ## Cronologia Commit Recenti
 
 ```
+f61361d - feat: add datasets, validation system and enhanced mining capabilities
+e8b3037 - update version
+f218a99 - ci: add test coverage with 80% threshold
+9ec1037 - fix: update Python SDK version and add tests for bug-inducing commits
+446090d - feat(plugin): add remote repository support and improve UI/UX
 28cb331 - fix(plugin): disable instrumentCode task and fix JSON parsing
-8ba90ed - fix: separate progress output (stderr) from JSON output (stdout)
-7323360 - kotlin classes
-af225e2 - feat(plugin): rewrite PyCharm plugin as SZZ-LLM Bug Analyzer
-6b5c29a - feat(cli): add CLI with URL cloning and JSON output for plugin integration
 ```
