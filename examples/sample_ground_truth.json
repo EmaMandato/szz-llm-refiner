@@ -1,0 +1,20 @@
+{
+  "description": "Sample ground truth dataset for validation",
+  "commits": [
+    {
+      "commit_hash": "abc123def456789",
+      "is_bug": true,
+      "notes": "NullPointerException fix"
+    },
+    {
+      "commit_hash": "def789abc123456",
+      "is_bug": false,
+      "notes": "Code reformatting only"
+    },
+    {
+      "commit_hash": "123abc456def789",
+      "is_bug": true,
+      "notes": "Off-by-one error fix"
+    }
+  ]
+}

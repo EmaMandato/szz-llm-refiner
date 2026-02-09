@@ -3,7 +3,8 @@ name = "szz-llm-project"
 version = "0.1.1"
 description = ""
 authors = [
-    {name = "Emanuele",email = "e.mandato@studenti.unisannio.it"}
+    {name = "Emanuele", email = "e.mandato@studenti.unisannio.it"},
+    {name = "Benedetta", email = "b.ranaldo@studenti.unisannio.it"}
 ]
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,6 +12,10 @@ dependencies = [
 ]
 
 [tool.poetry]
+name = "szz-llm-project"
+version = "0.1.0"
+description = "SZZ LLM Refiner - Bug-inducing commit analysis"
+authors = ["Emanuele <e.mandato@studenti.unisannio.it>", "Benedetta <b.ranaldo@studenti.unisannio.it>"]
 packages = [{include = "szz_llm_project", from = "src"}]
 
 [build-system]

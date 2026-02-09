@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Poetry (szz-llm-refiner)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10 (szz-llm-refiner)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_25" project-jdk-name="Python 3.12 (szz-llm-refiner) (2)" project-jdk-type="Python SDK" />
 </project>

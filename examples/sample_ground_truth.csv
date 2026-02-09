@@ -1,0 +1,4 @@
+commit_hash,is_bug
+abc123def456789,true
+def789abc123456,false
+123abc456def789,true

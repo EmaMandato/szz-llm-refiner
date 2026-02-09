@@ -5,7 +5,6 @@
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.iml" filepath="$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.main.iml" filepath="$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.main.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.test.iml" filepath="$PROJECT_DIR$/.idea/modules/my-pycharm-plugin.test.iml" />
-      <module fileurl="file://$PROJECT_DIR$/.idea/szz-llm-refiner.iml" filepath="$PROJECT_DIR$/.idea/szz-llm-refiner.iml" />
     </modules>
   </component>
 </project>
