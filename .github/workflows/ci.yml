@@ -32,6 +32,7 @@ jobs:
             --cov-branch \
             --cov-report=term-missing \
             --cov-report=xml \
+            --cov-report=html \
             --cov-fail-under=80 \
             -v
 
@@ -40,5 +41,7 @@ jobs:
         if: always()
         with:
           name: coverage-report
-          path: coverage.xml
+          path: |
+            coverage.xml
+            htmlcov/
           retention-days: 30
