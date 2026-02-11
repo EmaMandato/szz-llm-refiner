@@ -92,7 +92,9 @@ szz-llm-refiner/
 │   ├── test_miner.py              # Test base GitMiner
 │   ├── test_refiner.py            # Test base LLMRefiner
 │   ├── test_szz_bic.py            # Test SZZ + mock LLM
-│   └── test_miner_coverage.py     # Test coverage aggiuntivi
+│   ├── test_miner_coverage.py     # Test coverage miner (tag, date, filtri, BIC)
+│   ├── test_validator.py          # Test modulo validazione
+│   └── test_main.py               # Test CLI e orchestrazione
 │
 ├── pyproject.toml                 # Configurazione Poetry
 ├── poetry.lock                    # Lock delle dipendenze
@@ -525,20 +527,24 @@ Il progetto implementa una suite di test completa utilizzando **pytest** come fr
 
 **Risultati Coverage:**
 
-| Modulo | Coverage |
-|--------|----------|
-| `llm_refiner.py` | **100%** |
-| `miner.py` | **87%** |
-| **Totale** | **88%** |
+| Modulo | Stmts | Miss | Branch | Cover |
+|--------|-------|------|--------|-------|
+| `llm_refiner.py` | 15 | 0 | 0 | **100%** |
+| `miner.py` | 221 | 19 | 118 | **89%** |
+| `validator.py` | 148 | 0 | 54 | **99%** |
+| `main.py` | 285 | 82 | 92 | **69%** |
+| **Totale** | **669** | **101** | **264** | **83%** |
 
 ### 6.2 Struttura Test
 
 ```
 tests/
 ├── test_miner.py              # Test base GitMiner
-├── test_refiner.py            # Test base LLMRefiner  
+├── test_refiner.py            # Test base LLMRefiner
 ├── test_szz_bic.py            # Test SZZ algorithm + LLM mock
-└── test_miner_coverage.py     # Test coverage aggiuntivi
+├── test_miner_coverage.py     # Test coverage miner (tag, date, filtri, BIC)
+├── test_validator.py          # Test modulo validazione
+└── test_main.py               # Test CLI e orchestrazione
 ```
 
 ### 6.3 Tipologie di Test Implementate
@@ -547,6 +553,8 @@ tests/
 
 Test basati sulla conoscenza della struttura interna del codice. Verificano i singoli metodi e i diversi branch condizionali.
 
+**test_miner_coverage.py — GitMiner:**
+
 | Classe Test | Funzione Testata | Cosa Verifica |
 |-------------|------------------|---------------|
 | `TestGetFixingCommits` | `get_fixing_commits()` | Identificazione commit con keyword "fix", "bug", "issue" |
@@ -554,6 +562,41 @@ Test basati sulla conoscenza della struttura interna del codice. Verificano i si
 | `TestGetCommitDiff` | `get_commit_diff()` | Restituzione messaggio e diff testuale |
 | `TestGetBugInducingCommitsBranches` | `get_bug_inducing_commits()` | Copertura branch condizionali |
 | `TestRunGit` | `_run_git()` | Robustezza helper Git |
+| `TestGetTags` | `get_tags()` | Parsing output git tag, ordinamento per data, repo senza tag |
+| `TestGetTagNames` | `get_tag_names()` | Restituzione lista nomi tag |
+| `TestGetCommitDate` | `get_commit_date()` | Parsing data commit, hash invalido → None |
+| `TestGetTagCommitHash` | `get_tag_commit_hash()` | Risoluzione tag→hash, tag inesistente |
+| `TestGetCommitsBetweenTags` | `get_commits_between_tags()` | Commit nel range, esclusione from_tag |
+| `TestGetCommitsBetweenDates` | `get_commits_between_dates()` | Filtri since/until, range vuoto |
+| `TestShouldSkipByMessage` | `should_skip_by_message()` | 18 test: tutti i pattern di skip (refactor, docs, style, ecc.) |
+| `TestIsCosmeticChange` | `is_cosmetic_change()` | Commenti, whitespace, rinomina variabili, vere modifiche, diff vuoto |
+| `TestGetFixingCommitsWithFilters` | `get_fixing_commits()` | Filtro per tag range, date range, nessun filtro |
+| `TestBICFiltering` | `get_bug_inducing_commits()` | Blacklist, filtro messaggio BIC, filtro cosmetico BIC |
+
+**test_validator.py — Validator:**
+
+| Classe Test | Funzione Testata | Cosa Verifica |
+|-------------|------------------|---------------|
+| `TestCalculateMetrics` | `calculate_metrics()` | Calcolo TP/TN/FP/FN, precision, recall, F1, accuracy, lista vuota |
+| `TestLoadGroundTruthCSV` | `load_ground_truth_csv()` | CSV standard, colonne alternative, valori yes/no, CSV vuoto |
+| `TestLoadGroundTruthJSON` | `load_ground_truth_json()` | Formati Simple, Defects4J, LLM4SZZ, label stringa/numerico |
+| `TestLoadGroundTruth` | `load_ground_truth()` | Auto-detect CSV/JSON, formato non supportato → ValueError |
+| `TestRunValidation` | `run_validation()` | Validazione con mock, limit, verbose, errori, ground truth vuoto |
+| `TestPrintValidationReport` | `print_validation_report()` | Report formattato, errori troncati, show_errors=False |
+
+**test_main.py — CLI e Orchestrazione:**
+
+| Classe Test | Funzione Testata | Cosa Verifica |
+|-------------|------------------|---------------|
+| `TestParseDate` | `parse_date()` | Formati YYYY-MM-DD, ISO, timezone, errori |
+| `TestCheckGitInstalled` | `check_git_installed()` | Git presente, FileNotFoundError, returncode != 0 |
+| `TestCheckOllamaRunning` | `check_ollama_running()` | Status 200, connessione rifiutata, status 500 |
+| `TestCloneRepository` | `clone_repository()` | Clone OK, fallback branch, errore clone |
+| `TestGetTagsList` | `get_tags_list()` | Delega a GitMiner.get_tags() |
+| `TestLog` | `log()` | Modalità stdout vs stderr (JSON mode) |
+| `TestPrintReport` | `print_report()` | Formato text/JSON, selection params, errori, BIC troncati |
+| `TestRunAnalysis` | `run_analysis()` | Skip LLM, skip messaggio, LLM refactoring/bug, strategie tag/date |
+| `TestAnalysisDataclasses` | Dataclass | AnalysisResult, FilterStats, AnalysisReport defaults |
 
 #### 6.3.2 Test di Integrazione
 
@@ -661,6 +704,61 @@ Test per verificare il comportamento in situazioni limite.
 
 **Perché è importante:** Garantisce robustezza in tutti gli scenari possibili.
 
+#### `TestShouldSkipByMessage`
+
+**Cosa testa:** Il pre-filtro `should_skip_by_message()` con 18 scenari.
+
+**Come funziona:**
+1. Verifica ogni keyword di `SKIP_KEYWORDS` con i 3 pattern (prefisso con `:`, con `(`, con spazio)
+2. Verifica case-insensitivity
+3. Verifica che messaggi di bug fix e feature NON vengano scartati
+4. Verifica che keyword nel mezzo del messaggio non triggerino lo skip
+
+#### `TestIsCosmeticChange`
+
+**Cosa testa:** Il rilevamento di modifiche cosmetiche via `is_cosmetic_change()`.
+
+**Scenari coperti:**
+- Commit con sole modifiche ai commenti → `True`
+- Commit con sole modifiche whitespace → `True`
+- Commit con rinomina variabili → `True`
+- Commit con vere modifiche logiche → `False`
+- Commit con diff vuoto → `False`
+
+#### `TestBICFiltering`
+
+**Cosa testa:** I filtri applicati ai Bug-Inducing Commits trovati dall'SZZ.
+
+**Filtri verificati:**
+- **Blacklist**: BIC presente nella blacklist viene scartato
+- **Messaggio**: BIC con messaggio "refactor:/docs:/style:" viene scartato
+- **Cosmetic**: BIC con sole modifiche cosmetiche viene scartato
+
+#### `TestRunValidation`
+
+**Cosa testa:** L'esecuzione end-to-end della validazione con mock di GitMiner e LLMRefiner.
+
+**Scenari coperti:**
+- Validazione base con predizioni miste
+- Limite campioni (`limit`)
+- Modalità verbose con output su stdout
+- Gestione errori su singoli commit (skip graceful)
+- Ground truth vuoto → `ValueError`
+- Nessun commit trovato nel repo → `ValueError`
+
+#### `TestRunAnalysis`
+
+**Cosa testa:** La pipeline completa di analisi in `run_analysis()`.
+
+**Scenari coperti:**
+- Analisi senza LLM (`skip_llm=True`)
+- Skip per pre-filtro messaggio
+- LLM classifica come REFACTORING
+- LLM conferma BUG con SZZ
+- Strategia selezione per tag range
+- Strategia selezione per date range
+- `limit=0` (analizza tutti i commit)
+
 ### 6.6 Esecuzione Test
 
 ```bash
@@ -687,12 +785,12 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 
 | Metrica | Valore |
 |---------|--------|
-| Test totali | **36** |
-| Test passati | **36** |
-| Coverage statement | **88%** |
-| Coverage branch | **88%** |
-| File di test | **4** |
-| Classi di test | **9** |
+| Test totali | **157** |
+| Test passati | **157** |
+| Coverage totale | **83%** |
+| Coverage branch | **83%** |
+| File di test | **6** |
+| Classi di test | **24** |
 
 ### 6.8 File Generati
 
@@ -801,17 +899,19 @@ Metrics:
 
 ```yaml
 1. Checkout code
-2. Setup Python 3.10
+2. Setup Python 3.12
 3. Install Poetry
 4. Install dependencies: poetry install
-5. Run tests with coverage: poetry run pytest --cov=src
+5. Run tests with coverage (threshold 80%, branch coverage, report XML + HTML)
+6. Upload artifact: coverage-report (coverage.xml + htmlcov/)
 ```
 
 ### Obiettivi
 
 - Setup ambiente deterministico
-- Testing automatizzato con metriche coverage
-- Report coverage per quality assurance
+- Testing automatizzato con metriche coverage (soglia minima 80%)
+- Report coverage in formato XML e HTML interattivo
+- Artifact scaricabile dalla pagina del workflow run
 
 ---
 
@@ -908,12 +1008,10 @@ szz-run ./repo --limit 50 --output json --skip-llm
 |---------|--------|
 | File sorgente Python | 4 |
 | File sorgente Kotlin | 7 |
-| File test | 4 |
-| Test totali | 36 |
-| Coverage | 88% |
+| File test | 6 |
+| Test totali | 157 |
+| Coverage | 83% |
 | Dataset campioni | ~2300 |
-| Dimensione sorgenti Python | ~80 KB |
-| Dimensione test | ~25 KB |
 
 ---
 
