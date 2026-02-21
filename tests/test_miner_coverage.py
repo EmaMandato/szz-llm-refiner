@@ -574,113 +574,6 @@ def _make_repo():
     return repo_dir, run_git
 
 
-class TestGetTags:
-    """Test per get_tags() - linee 54-82."""
-
-    @pytest.fixture
-    def repo_with_tags(self):
-        repo_dir, _ = _make_repo()
-        fp = os.path.join(repo_dir, "f.txt")
-
-        def run_git_env(*args, env_extra=None):
-            env = os.environ.copy()
-            if env_extra:
-                env.update(env_extra)
-            return subprocess.run(
-                ["git", "-C", repo_dir] + list(args),
-                capture_output=True, text=True, check=True, env=env
-            ).stdout.strip()
-
-        with open(fp, "w") as f:
-            f.write("v1")
-        run_git_env("add", ".")
-        run_git_env("commit", "-m", "first",
-                    env_extra={"GIT_COMMITTER_DATE": "2024-01-01T00:00:00",
-                               "GIT_AUTHOR_DATE": "2024-01-01T00:00:00"})
-        run_git_env("tag", "v1.0")
-
-        with open(fp, "w") as f:
-            f.write("v2")
-        run_git_env("add", ".")
-        run_git_env("commit", "-m", "second",
-                    env_extra={"GIT_COMMITTER_DATE": "2024-06-01T00:00:00",
-                               "GIT_AUTHOR_DATE": "2024-06-01T00:00:00"})
-        run_git_env("tag", "v2.0")
-
-        yield repo_dir
-        shutil.rmtree(repo_dir, ignore_errors=True)
-
-    def test_returns_list_of_dicts(self, repo_with_tags):
-        miner = GitMiner(repo_with_tags)
-        tags = miner.get_tags()
-        assert isinstance(tags, list)
-        assert len(tags) == 2
-        for t in tags:
-            assert "name" in t
-            assert "hash" in t
-            assert "date" in t
-
-    def test_tags_ordered_newest_first(self, repo_with_tags):
-        miner = GitMiner(repo_with_tags)
-        tags = miner.get_tags()
-        assert tags[0]["name"] == "v2.0"
-        assert tags[1]["name"] == "v1.0"
-
-    def test_empty_repo_no_tags(self):
-        repo_dir, run_git = _make_repo()
-        try:
-            fp = os.path.join(repo_dir, "f.txt")
-            with open(fp, "w") as f:
-                f.write("x")
-            run_git("add", ".")
-            run_git("commit", "-m", "init")
-
-            miner = GitMiner(repo_dir)
-            assert miner.get_tags() == []
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-    def test_tag_with_empty_date(self):
-        """Tag senza data parsabile non deve crashare."""
-        repo_dir, run_git = _make_repo()
-        try:
-            fp = os.path.join(repo_dir, "f.txt")
-            with open(fp, "w") as f:
-                f.write("x")
-            run_git("add", ".")
-            run_git("commit", "-m", "init")
-            run_git("tag", "v0.1")
-
-            miner = GitMiner(repo_dir)
-            tags = miner.get_tags()
-            assert len(tags) == 1
-            assert tags[0]["name"] == "v0.1"
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-
-class TestGetTagNames:
-    """Test per get_tag_names() - linea 86."""
-
-    def test_returns_name_list(self):
-        repo_dir, run_git = _make_repo()
-        try:
-            fp = os.path.join(repo_dir, "f.txt")
-            with open(fp, "w") as f:
-                f.write("v1")
-            run_git("add", ".")
-            run_git("commit", "-m", "init")
-            run_git("tag", "alpha")
-            run_git("tag", "beta")
-
-            miner = GitMiner(repo_dir)
-            names = miner.get_tag_names()
-            assert "alpha" in names
-            assert "beta" in names
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-
 class TestGetCommitDate:
     """Test per get_commit_date() - linee 90-96."""
 
@@ -713,85 +606,6 @@ class TestGetCommitDate:
             assert miner.get_commit_date("0000000000000000") is None
         finally:
             shutil.rmtree(repo_dir, ignore_errors=True)
-
-
-class TestGetTagCommitHash:
-    """Test per get_tag_commit_hash() - linee 100-101."""
-
-    def test_resolves_tag(self):
-        repo_dir, run_git = _make_repo()
-        try:
-            fp = os.path.join(repo_dir, "f.txt")
-            with open(fp, "w") as f:
-                f.write("x")
-            run_git("add", ".")
-            run_git("commit", "-m", "init")
-            expected = run_git("rev-parse", "HEAD")
-            run_git("tag", "v1.0")
-
-            miner = GitMiner(repo_dir)
-            assert miner.get_tag_commit_hash("v1.0") == expected
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-    def test_invalid_tag_returns_none(self):
-        repo_dir, run_git = _make_repo()
-        try:
-            fp = os.path.join(repo_dir, "f.txt")
-            with open(fp, "w") as f:
-                f.write("x")
-            run_git("add", ".")
-            run_git("commit", "-m", "init")
-
-            miner = GitMiner(repo_dir)
-            result = miner.get_tag_commit_hash("nonexistent")
-            assert result is None or result == ""
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-
-class TestGetCommitsBetweenTags:
-    """Test per get_commits_between_tags() - linee 115-122."""
-
-    @pytest.fixture
-    def repo_with_tagged_commits(self):
-        repo_dir, run_git = _make_repo()
-        fp = os.path.join(repo_dir, "f.txt")
-
-        with open(fp, "w") as f:
-            f.write("v1")
-        run_git("add", ".")
-        run_git("commit", "-m", "first")
-        run_git("tag", "v1.0")
-
-        with open(fp, "w") as f:
-            f.write("v2")
-        run_git("add", ".")
-        run_git("commit", "-m", "second")
-        h2 = run_git("rev-parse", "HEAD")
-
-        with open(fp, "w") as f:
-            f.write("v3")
-        run_git("add", ".")
-        run_git("commit", "-m", "third")
-        h3 = run_git("rev-parse", "HEAD")
-        run_git("tag", "v2.0")
-
-        yield {"path": repo_dir, "h2": h2, "h3": h3}
-        shutil.rmtree(repo_dir, ignore_errors=True)
-
-    def test_returns_commits_in_range(self, repo_with_tagged_commits):
-        miner = GitMiner(repo_with_tagged_commits["path"])
-        commits = miner.get_commits_between_tags("v1.0", "v2.0")
-        assert repo_with_tagged_commits["h2"] in commits
-        assert repo_with_tagged_commits["h3"] in commits
-
-    def test_excludes_from_tag_commit(self, repo_with_tagged_commits):
-        miner = GitMiner(repo_with_tagged_commits["path"])
-        commits = miner.get_commits_between_tags("v1.0", "v2.0")
-        # Il commit puntato da v1.0 non dovrebbe essere incluso
-        v1_hash = miner.get_tag_commit_hash("v1.0")
-        assert v1_hash not in commits
 
 
 class TestGetCommitsBetweenDates:
@@ -1052,72 +866,48 @@ class TestIsCosmeticChange:
 
 
 class TestGetFixingCommitsWithFilters:
-    """Test per get_fixing_commits() con filtri tag e date - linee 306-317."""
+    """Test per get_fixing_commits() con filtri date - linee 306-317."""
 
     @pytest.fixture
-    def repo_with_tags_and_fixes(self):
+    def repo_with_fixes(self):
         repo_dir, run_git = _make_repo()
         fp = os.path.join(repo_dir, "f.txt")
 
-        # Commit 1 - tag v1.0
+        # Commit 1 - fix commit
         with open(fp, "w") as f:
             f.write("v1")
         run_git("add", ".")
-        run_git("commit", "-m", "initial release")
-        run_git("tag", "v1.0")
+        run_git("commit", "-m", "fix: first bug")
+        h_fix1 = run_git("rev-parse", "HEAD")
 
-        # Commit 2 - fix tra v1.0 e v2.0
+        # Commit 2 - fix commit
         with open(fp, "w") as f:
             f.write("v2")
         run_git("add", ".")
-        run_git("commit", "-m", "fix: bug between tags")
-        h_fix = run_git("rev-parse", "HEAD")
+        run_git("commit", "-m", "fix: second bug")
+        h_fix2 = run_git("rev-parse", "HEAD")
 
-        # Commit 3 - non fix
+        # Commit 3 - normal commit (non-fix)
         with open(fp, "w") as f:
             f.write("v3")
         run_git("add", ".")
-        run_git("commit", "-m", "add feature")
+        run_git("commit", "-m", "update feature")
 
-        # Commit 4 - tag v2.0
-        with open(fp, "w") as f:
-            f.write("v4")
-        run_git("add", ".")
-        run_git("commit", "-m", "fix: another issue")
-        run_git("tag", "v2.0")
-        h_fix2 = run_git("rev-parse", "HEAD")
-
-        # Commit 5 - dopo v2.0 (non nel range)
-        with open(fp, "w") as f:
-            f.write("v5")
-        run_git("add", ".")
-        run_git("commit", "-m", "fix: outside range")
-        h_outside = run_git("rev-parse", "HEAD")
-
-        yield {
-            "path": repo_dir, "h_fix": h_fix,
-            "h_fix2": h_fix2, "h_outside": h_outside
-        }
+        yield {"path": repo_dir, "h_fix1": h_fix1, "h_fix2": h_fix2}
         shutil.rmtree(repo_dir, ignore_errors=True)
 
-    def test_filter_by_tag_range(self, repo_with_tags_and_fixes):
-        miner = GitMiner(repo_with_tags_and_fixes["path"])
-        fixes = miner.get_fixing_commits(from_tag="v1.0", to_tag="v2.0")
-        assert repo_with_tags_and_fixes["h_fix"] in fixes
-        assert repo_with_tags_and_fixes["h_outside"] not in fixes
-
-    def test_filter_by_date_range(self, repo_with_tags_and_fixes):
-        miner = GitMiner(repo_with_tags_and_fixes["path"])
+    def test_filter_by_date_range(self, repo_with_fixes):
+        miner = GitMiner(repo_with_fixes["path"])
         since = datetime.now() - timedelta(days=1)
         until = datetime.now() + timedelta(days=1)
         fixes = miner.get_fixing_commits(since=since, until=until)
         assert len(fixes) >= 1
 
-    def test_no_filter_returns_all(self, repo_with_tags_and_fixes):
-        miner = GitMiner(repo_with_tags_and_fixes["path"])
+    def test_no_filter_returns_all(self, repo_with_fixes):
+        miner = GitMiner(repo_with_fixes["path"])
         fixes = miner.get_fixing_commits()
         # Dovrebbe trovare tutti i fix commit
-        assert len(fixes) >= 3
+        assert len(fixes) >= 2
 
 
 class TestBICFiltering:

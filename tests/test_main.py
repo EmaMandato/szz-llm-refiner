@@ -18,7 +18,6 @@ from szz_llm_project.main import (
     check_git_installed,
     check_ollama_running,
     clone_repository,
-    get_tags_list,
     print_report,
     run_analysis,
     log,
@@ -141,19 +140,6 @@ class TestCloneRepository:
                 clone_repository("https://example.com/bad.git")
 
 
-class TestGetTagsList:
-    """Test per get_tags_list() - linee 121-127."""
-
-    def test_delegates_to_miner(self):
-        with patch("szz_llm_project.main.GitMiner") as MockMiner:
-            mock_miner = MockMiner.return_value
-            mock_miner.get_tags.return_value = [{"name": "v1.0", "hash": "abc", "date": ""}]
-
-            result = get_tags_list("/fake/repo")
-            assert len(result) == 1
-            assert result[0]["name"] == "v1.0"
-
-
 class TestLog:
     """Test per log() - linee 20-25."""
 
@@ -241,13 +227,13 @@ class TestPrintReport:
 
     def test_text_with_selection_params(self, capsys):
         report = self._make_report(
-            selection_strategy="tag_range",
-            selection_params={"from_tag": "v1.0", "to_tag": "v2.0"}
+            selection_strategy="date_range",
+            selection_params={"since": "2024-01-01", "until": "2024-06-30"}
         )
         print_report(report, "text")
         out = capsys.readouterr().out
-        assert "tag_range" in out
-        assert "v1.0" in out
+        assert "date_range" in out
+        assert "2024-01-01" in out
 
     def test_text_with_errors(self, capsys):
         report = self._make_report(errors=["some error occurred"])
@@ -333,7 +319,7 @@ class TestRunAnalysis:
             mock_miner.should_skip_by_message.return_value = False
 
             mock_refiner = MockRefiner.return_value
-            mock_refiner.is_real_bug_fix.return_value = False
+            mock_refiner.is_real_bug_fix.return_value = (False, "This is a refactoring change")
 
             report = run_analysis("/fake/repo", skip_llm=False)
 
@@ -352,25 +338,12 @@ class TestRunAnalysis:
             mock_miner.get_commit_message.return_value = "old commit"
 
             mock_refiner = MockRefiner.return_value
-            mock_refiner.is_real_bug_fix.return_value = True
+            mock_refiner.is_real_bug_fix.return_value = (True, "Fixes null pointer exception")
 
             report = run_analysis("/fake/repo", skip_llm=False)
 
             assert report.confirmed_bugs == 1
             assert report.results[0]["is_bug"] is True
-
-    def test_analysis_tag_strategy(self):
-        with patch("szz_llm_project.main.GitMiner") as MockMiner:
-            mock_miner = MockMiner.return_value
-            mock_miner.get_fixing_commits.return_value = []
-
-            report = run_analysis(
-                "/fake/repo", skip_llm=True,
-                from_tag="v1.0", to_tag="v2.0"
-            )
-
-            assert report.selection_strategy == "tag_range"
-            assert report.selection_params["from_tag"] == "v1.0"
 
     def test_analysis_date_strategy(self):
         since = datetime(2024, 1, 1)
@@ -441,10 +414,12 @@ class TestAnalysisDataclasses:
             is_bug=True,
             bug_inducing_commits=["def"],
             skipped_reason=None,
+            llm_explanation="Fixes null pointer exception",
         )
         d = asdict(r)
         assert d["fix_commit"] == "abc"
         assert d["is_bug"] is True
+        assert d["llm_explanation"] == "Fixes null pointer exception"
 
     def test_analysis_result_skipped(self):
         r = AnalysisResult(
@@ -453,8 +428,10 @@ class TestAnalysisDataclasses:
             is_bug=False,
             bug_inducing_commits=[],
             skipped_reason="pre-filter:message",
+            llm_explanation=None,
         )
         assert r.skipped_reason == "pre-filter:message"
+        assert r.llm_explanation is None
 
     def test_filter_stats_defaults(self):
         s = FilterStats()

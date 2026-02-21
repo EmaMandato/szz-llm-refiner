@@ -17,6 +17,8 @@ import com.intellij.util.ui.JBUI
 import it.unisannio.ingsw2.szzllm.model.*
 import it.unisannio.ingsw2.szzllm.services.SzzAnalyzerService
 import java.awt.*
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
@@ -72,24 +74,9 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
     private val sinceField = JBTextField(10).apply { emptyText.text = "YYYY-MM-DD" }
     private val untilField = JBTextField(10).apply { emptyText.text = "YYYY-MM-DD" }
 
-    private val tagRangePanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
-    private val fromTagComboBox = JComboBox<String>().apply {
-        preferredSize = Dimension(120, preferredSize.height)
-        isEditable = true
-    }
-    private val toTagComboBox = JComboBox<String>().apply {
-        preferredSize = Dimension(120, preferredSize.height)
-        isEditable = true
-    }
-    private val refreshTagsButton = JButton(AllIcons.Actions.Refresh).apply {
-        toolTipText = "Fetch tags"
-        preferredSize = Dimension(28, 28)
-    }
-
     private val selectionOptionsPanel = JPanel(CardLayout())
     private val limitSpinner = JSpinner(SpinnerNumberModel(10, 0, 10000, 1))
     private val skipLlmCheckbox = JCheckBox("Skip LLM")
-    private var availableTags: List<TagInfo> = emptyList()
 
     init {
         resultsTable = JBTable(resultsModel)
@@ -166,25 +153,16 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
             addActionListener { untilField.text = SimpleDateFormat("yyyy-MM-dd").format(Date()) }
         })
 
-        tagRangePanel.add(JBLabel("From:"))
-        tagRangePanel.add(fromTagComboBox)
-        tagRangePanel.add(JBLabel("To:"))
-        tagRangePanel.add(toTagComboBox)
-        tagRangePanel.add(refreshTagsButton)
-        refreshTagsButton.addActionListener { fetchTags() }
-
         val emptyPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
         emptyPanel.add(JBLabel("(Analyze recent commits)"))
 
         selectionOptionsPanel.add(emptyPanel, SelectionStrategy.ALL.name)
         selectionOptionsPanel.add(dateRangePanel, SelectionStrategy.DATE_RANGE.name)
-        selectionOptionsPanel.add(tagRangePanel, SelectionStrategy.TAG_RANGE.name)
         strategyPanel.add(selectionOptionsPanel)
 
         strategyComboBox.addActionListener {
             val selected = strategyComboBox.selectedItem as SelectionStrategy
             (selectionOptionsPanel.layout as CardLayout).show(selectionOptionsPanel, selected.name)
-            if (selected == SelectionStrategy.TAG_RANGE && availableTags.isEmpty()) fetchTags()
         }
         panel.add(strategyPanel)
 
@@ -237,41 +215,6 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
         }
     }
 
-    private fun fetchTags() {
-        refreshTagsButton.isEnabled = false
-        statusLabel.text = "Fetching tags..."
-        val isRemote = sourceComboBox.selectedIndex == 1
-        analyzerService.fetchTags(
-            repoPath = if (isRemote) null else project.basePath,
-            repoUrl = if (isRemote) urlField.text.trim() else null,
-            onSuccess = { tags ->
-                SwingUtilities.invokeLater {
-                    availableTags = tags
-                    fromTagComboBox.removeAllItems()
-                    toTagComboBox.removeAllItems()
-                    tags.forEach {
-                        fromTagComboBox.addItem(it.name)
-                        toTagComboBox.addItem(it.name)
-                    }
-                    if (tags.size >= 2) {
-                        toTagComboBox.selectedIndex = 0
-                        fromTagComboBox.selectedIndex = 1
-                    }
-                    statusLabel.text = "Found ${tags.size} tags"
-                    statusLabel.foreground = JBColor(Color(0, 128, 0), Color(100, 200, 100))
-                    refreshTagsButton.isEnabled = true
-                }
-            },
-            onError = { error ->
-                SwingUtilities.invokeLater {
-                    statusLabel.text = "Error: $error"
-                    statusLabel.foreground = JBColor.RED
-                    refreshTagsButton.isEnabled = true
-                }
-            }
-        )
-    }
-
     private fun fetchLocalBranches(repoPath: String): List<String> {
         val process = ProcessBuilder("git", "-C", repoPath, "branch", "-a").redirectErrorStream(true).start()
         val branches = mutableListOf<String>()
@@ -311,6 +254,8 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
             columnModel.getColumn(1).preferredWidth = 80
             columnModel.getColumn(2).preferredWidth = 400
             columnModel.getColumn(3).preferredWidth = 80
+
+            // Renderer per colonna Type (colorata)
             columnModel.getColumn(1).cellRenderer = object : DefaultTableCellRenderer() {
                 override fun getTableCellRendererComponent(table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int): Component {
                     val comp = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
@@ -318,10 +263,78 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
                     return comp
                 }
             }
+
+            // Renderer per colonna BICs (cliccabile, stile link)
+            columnModel.getColumn(3).cellRenderer = object : DefaultTableCellRenderer() {
+                override fun getTableCellRendererComponent(table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int): Component {
+                    val comp = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+                    val strValue = value?.toString() ?: "-"
+                    if (strValue != "-" && strValue != "0") {
+                        text = "<html><u>$strValue</u></html>"
+                        foreground = if (isSelected) table.selectionForeground else JBColor.BLUE
+                        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                    } else {
+                        foreground = if (isSelected) table.selectionForeground else JBColor.GRAY
+                    }
+                    horizontalAlignment = CENTER
+                    return comp
+                }
+            }
+
+            // Mouse listener per click su colonna BICs
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    val row = rowAtPoint(e.point)
+                    val col = columnAtPoint(e.point)
+                    if (row >= 0 && col == 3) { // Colonna BICs
+                        val result = resultsModel.getResultAt(row)
+                        if (result.isBug && result.bugInducingCommits.isNotEmpty()) {
+                            showBicPopup(e, result.bugInducingCommits)
+                        }
+                    }
+                }
+            })
+
             selectionModel.addListSelectionListener { e ->
                 if (!e.valueIsAdjusting && selectedRow >= 0) showResultDetails(resultsModel.getResultAt(selectedRow))
             }
         }
+    }
+
+    private fun showBicPopup(e: MouseEvent, bics: List<String>) {
+        val popup = JPopupMenu()
+
+        // Header
+        val headerItem = JMenuItem("Bug-Inducing Commits (${bics.size})")
+        headerItem.isEnabled = false
+        headerItem.font = headerItem.font.deriveFont(Font.BOLD)
+        popup.add(headerItem)
+        popup.addSeparator()
+
+        // Lista BICs (max 15 visibili nel popup)
+        bics.take(15).forEach { bic ->
+            val shortHash = bic.take(8)
+            val fullHash = bic.take(40)
+            val item = JMenuItem(shortHash)
+            item.toolTipText = "Click to copy: $fullHash"
+            item.addActionListener {
+                // Copia l'hash negli appunti
+                val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                clipboard.setContents(java.awt.datatransfer.StringSelection(fullHash), null)
+                statusLabel.text = "Copied: $shortHash"
+                statusLabel.foreground = JBColor(Color(0, 128, 0), Color(100, 200, 100))
+            }
+            popup.add(item)
+        }
+
+        if (bics.size > 15) {
+            popup.addSeparator()
+            val moreItem = JMenuItem("... and ${bics.size - 15} more (see Details)")
+            moreItem.isEnabled = false
+            popup.add(moreItem)
+        }
+
+        popup.show(e.component, e.x, e.y)
     }
 
     private fun setupListeners() {
@@ -375,14 +388,26 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
 
     private fun showResultDetails(result: AnalysisResult) {
         detailsArea.text = buildString {
-            appendLine("=" .repeat(50))
+            appendLine("=".repeat(50))
             appendLine("FIX COMMIT: ${result.fixCommit}")
-            appendLine("=" .repeat(50))
+            appendLine("=".repeat(50))
             appendLine("\nType: ${if (result.skippedReason != null) "SKIPPED (${result.skippedReason})" else if (result.isBug) "BUG FIX" else "REFACTORING"}")
-            appendLine("\nMessage:\n${result.commitMessage}")
+
+            // Mostra la spiegazione LLM se disponibile
+            if (!result.llmExplanation.isNullOrBlank()) {
+                appendLine("\nLLM Explanation:")
+                appendLine("  ${result.llmExplanation}")
+            }
+
+            appendLine("\nCommit Message:")
+            appendLine("  ${result.commitMessage}")
+
             if (result.isBug && result.bugInducingCommits.isNotEmpty()) {
                 appendLine("\nBug-Inducing Commits (${result.bugInducingCommits.size}):")
-                result.bugInducingCommits.forEach { appendLine("  - $it") }
+                appendLine("-".repeat(40))
+                result.bugInducingCommits.forEachIndexed { index, bic ->
+                    appendLine("  ${index + 1}. $bic")
+                }
             }
         }
         detailsArea.caretPosition = 0
@@ -415,8 +440,6 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
         val strategy = strategyComboBox.selectedItem as SelectionStrategy
         var since: String? = null
         var until: String? = null
-        var fromTag: String? = null
-        var toTag: String? = null
 
         when (strategy) {
             SelectionStrategy.DATE_RANGE -> {
@@ -424,15 +447,6 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
                 until = untilField.text.trim().takeIf { it.isNotEmpty() }
                 if (since == null && until == null) {
                     statusLabel.text = "Error: Enter at least one date"
-                    statusLabel.foreground = JBColor.RED
-                    return
-                }
-            }
-            SelectionStrategy.TAG_RANGE -> {
-                fromTag = fromTagComboBox.selectedItem?.toString()?.trim()
-                toTag = toTagComboBox.selectedItem?.toString()?.trim()
-                if (fromTag.isNullOrEmpty() || toTag.isNullOrEmpty()) {
-                    statusLabel.text = "Error: Select both tags"
                     statusLabel.foreground = JBColor.RED
                     return
                 }
@@ -452,9 +466,7 @@ class SzzToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(t
             skipLlm = skipLlmCheckbox.isSelected,
             selectionStrategy = strategy,
             since = since,
-            until = until,
-            fromTag = fromTag,
-            toTag = toTag
+            until = until
         ))
     }
 

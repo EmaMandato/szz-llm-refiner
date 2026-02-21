@@ -30,13 +30,15 @@ Il progetto è stato sviluppato come parte del corso di **Ingegneria del Softwar
 
 - Estrazione di fixing commits tramite keyword matching
 - Implementazione dell'algoritmo SZZ con git blame
-- Filtraggio dei falsi positivi tramite LLM
+- Filtraggio dei falsi positivi tramite LLM con spiegazione della classificazione
 - Sistema di filtri multi-livello (messaggi, modifiche cosmetiche, blacklist)
-- Selezione commit per range di date o tag
+- Selezione commit per range di date
 - Sistema di validazione con dataset benchmark (Defects4J, ICSE2021)
 - Calcolo metriche (Precision, Recall, F1, Accuracy)
 - Output in formato JSON/text
-- Plugin PyCharm per integrazione IDE
+- Plugin PyCharm per integrazione IDE con:
+  - Visualizzazione spiegazioni LLM per ogni classificazione
+  - BIC cliccabili con popup dettagli e copia hash
 
 ---
 
@@ -175,9 +177,6 @@ Il progetto è strutturato su **due livelli**:
 | `--skip-llm` | Salta raffinamento LLM | false |
 | `--since` | Analizza commit dopo questa data (YYYY-MM-DD) | - |
 | `--until` | Analizza commit prima di questa data (YYYY-MM-DD) | - |
-| `--from-tag` | Tag di partenza per range analisi | - |
-| `--to-tag` | Tag di arrivo per range analisi | - |
-| `--list-tags` | Mostra tag disponibili ed esci | false |
 | `--validate` | Esegue validazione contro ground truth (CSV/JSON) | - |
 | `--validation-limit` | Max campioni da validare | 0 (tutti) |
 
@@ -194,13 +193,12 @@ Il progetto è strutturato su **due livelli**:
 
 | Metodo | Descrizione |
 |--------|-------------|
-| `get_fixing_commits(since, until, from_tag, to_tag)` | Identifica fix commits via keyword matching con filtri |
+| `get_fixing_commits(since, until)` | Identifica fix commits via keyword matching con filtri |
 | `get_commit_diff(hash)` | Estrae messaggio e diff completo |
 | `get_bug_inducing_commits(fix_commit, blacklist)` | Traccia bug-inducing via git blame con filtri |
 | `get_fix_details(hash)` | Estrae file modificati e righe eliminate |
-| `get_tags()` | Restituisce lista tag con data e hash |
-| `get_commits_between_tags(from_tag, to_tag)` | Commit in un range di tag |
 | `get_commits_between_dates(since, until)` | Commit in un range di date |
+| `get_commit_date(hash)` | Restituisce la data di un commit |
 | `should_skip_by_message(msg)` | Pre-filtro veloce basato su keyword |
 | `is_cosmetic_change(hash)` | Rileva modifiche solo cosmetiche (rename, commenti, whitespace) |
 | `get_commit_message(hash)` | Restituisce solo il messaggio di un commit |
@@ -234,13 +232,21 @@ Il miner implementa un sistema di filtri a più livelli per ridurre i falsi posi
 **Responsabilità:**
 - Filtraggio falsi positivi tramite analisi LLM
 - Distinzione tra fix reali e refactoring/documentazione
+- Generazione di spiegazioni per le classificazioni
 
 **Metodo principale:**
-- `is_real_bug_fix(commit_message, diff)`: Interroga API Ollama
+- `is_real_bug_fix(commit_message, diff) -> Tuple[bool, str]`: Interroga API Ollama e restituisce:
+  - `is_bug`: True se è un bug fix, False altrimenti
+  - `explanation`: Breve spiegazione della classificazione generata dall'LLM
 
 **Integrazione:**
 - Comunica con Ollama HTTP API a `http://localhost:11434/api/generate`
-- Invia prompt chiedendo classificazione "BUG" o "REFACTORING"
+- Invia prompt chiedendo classificazione "BUG" o "REFACTORING" con motivazione
+- Il prompt richiede risposta nel formato:
+  ```
+  CLASSIFICAZIONE: BUG oppure REFACTORING
+  MOTIVO: breve spiegazione (max 20 parole)
+  ```
 
 #### `validator.py` - Sistema di Validazione
 
@@ -313,7 +319,10 @@ Crea e gestisce la tool window SZZ-LLM in PyCharm.
 **Funzionalità:**
 - Fetch dinamico branch via `git branch` e `git ls-remote`
 - Modello tabella con hash, tipo, messaggio, conteggio BIC
-- Rendering colorato (rosso per BUG, grigio per REFACTORING)
+- Rendering colorato (rosso per BUG, arancione per SKIPPED, grigio per REFACTORING)
+- Colonna BIC cliccabile con popup che mostra la lista degli hash
+- Copia hash negli appunti al click su un BIC nel popup
+- Visualizzazione spiegazione LLM nel pannello dettagli
 - Interfaccia a tab (Dettagli, Output Log)
 
 #### `SzzAnalyzerService.kt` - Engine Analisi (~352 righe)
@@ -338,15 +347,25 @@ Crea e gestisce la tool window SZZ-LLM in PyCharm.
 **Menu action:** "Run SZZ-LLM Analysis"
 **Shortcut:** `Ctrl+Alt+Z`
 
-#### `AnalysisModels.kt` - Data Models (~72 righe)
+#### `AnalysisModels.kt` - Data Models (~80 righe)
 
 **Data classes Kotlin con annotazioni Gson:**
-- `AnalysisResult`: Dettagli fix commit
+- `AnalysisResult`: Dettagli fix commit (include `llmExplanation` per la spiegazione LLM)
 - `AnalysisReport`: Report analisi completo
 - `AnalysisConfig`: Parametri configurazione
 - `AnalysisProgress`: Tracking progresso
 - `AnalysisStatus`: Enum (IDLE, RUNNING, COMPLETED, FAILED, CANCELLED)
 - `AnalysisError`: Modello risposta errore
+
+**Campi AnalysisResult:**
+| Campo | Tipo | Descrizione |
+|-------|------|-------------|
+| `fixCommit` | String | Hash del commit di fix |
+| `commitMessage` | String | Messaggio del commit |
+| `isBug` | Boolean | True se classificato come bug fix |
+| `bugInducingCommits` | List<String> | Lista hash dei BIC |
+| `skippedReason` | String? | Motivo skip (es. "pre-filter:message", "llm:refactoring") |
+| `llmExplanation` | String? | Spiegazione generata dall'LLM per la classificazione |
 
 #### `SzzSettings.kt` - Settings Persistenti (~46 righe)
 
@@ -562,15 +581,11 @@ Test basati sulla conoscenza della struttura interna del codice. Verificano i si
 | `TestGetCommitDiff` | `get_commit_diff()` | Restituzione messaggio e diff testuale |
 | `TestGetBugInducingCommitsBranches` | `get_bug_inducing_commits()` | Copertura branch condizionali |
 | `TestRunGit` | `_run_git()` | Robustezza helper Git |
-| `TestGetTags` | `get_tags()` | Parsing output git tag, ordinamento per data, repo senza tag |
-| `TestGetTagNames` | `get_tag_names()` | Restituzione lista nomi tag |
 | `TestGetCommitDate` | `get_commit_date()` | Parsing data commit, hash invalido → None |
-| `TestGetTagCommitHash` | `get_tag_commit_hash()` | Risoluzione tag→hash, tag inesistente |
-| `TestGetCommitsBetweenTags` | `get_commits_between_tags()` | Commit nel range, esclusione from_tag |
 | `TestGetCommitsBetweenDates` | `get_commits_between_dates()` | Filtri since/until, range vuoto |
 | `TestShouldSkipByMessage` | `should_skip_by_message()` | 18 test: tutti i pattern di skip (refactor, docs, style, ecc.) |
 | `TestIsCosmeticChange` | `is_cosmetic_change()` | Commenti, whitespace, rinomina variabili, vere modifiche, diff vuoto |
-| `TestGetFixingCommitsWithFilters` | `get_fixing_commits()` | Filtro per tag range, date range, nessun filtro |
+| `TestGetFixingCommitsWithFilters` | `get_fixing_commits()` | Filtro per date range, nessun filtro |
 | `TestBICFiltering` | `get_bug_inducing_commits()` | Blacklist, filtro messaggio BIC, filtro cosmetico BIC |
 
 **test_validator.py — Validator:**
@@ -592,11 +607,10 @@ Test basati sulla conoscenza della struttura interna del codice. Verificano i si
 | `TestCheckGitInstalled` | `check_git_installed()` | Git presente, FileNotFoundError, returncode != 0 |
 | `TestCheckOllamaRunning` | `check_ollama_running()` | Status 200, connessione rifiutata, status 500 |
 | `TestCloneRepository` | `clone_repository()` | Clone OK, fallback branch, errore clone |
-| `TestGetTagsList` | `get_tags_list()` | Delega a GitMiner.get_tags() |
 | `TestLog` | `log()` | Modalità stdout vs stderr (JSON mode) |
 | `TestPrintReport` | `print_report()` | Formato text/JSON, selection params, errori, BIC troncati |
-| `TestRunAnalysis` | `run_analysis()` | Skip LLM, skip messaggio, LLM refactoring/bug, strategie tag/date |
-| `TestAnalysisDataclasses` | Dataclass | AnalysisResult, FilterStats, AnalysisReport defaults |
+| `TestRunAnalysis` | `run_analysis()` | Skip LLM, skip messaggio, LLM refactoring/bug, strategie date |
+| `TestAnalysisDataclasses` | Dataclass | AnalysisResult (con llm_explanation), FilterStats, AnalysisReport |
 
 #### 6.3.2 Test di Integrazione
 
@@ -631,11 +645,11 @@ Test che simulano le dipendenze esterne (Ollama) per verificare il comportamento
 
 | Test | Scenario Simulato | Risultato Atteso |
 |------|-------------------|------------------|
-| `test_classifies_null_pointer_fix_as_bug` | Risposta "BUG" | `is_real_bug_fix()` → `True` |
-| `test_classifies_refactoring_as_not_bug` | Risposta "REFACTORING" | `is_real_bug_fix()` → `False` |
-| `test_handles_llm_timeout` | Timeout connessione | Gestione graceful → `False` |
-| `test_handles_malformed_response` | JSON invalido | Gestione errore → `False` |
-| `test_handles_connection_error` | Ollama non raggiungibile | Gestione errore → `False` |
+| `test_classifies_null_pointer_fix_as_bug` | Risposta "BUG" con motivo | `is_real_bug_fix()` → `(True, "...")` |
+| `test_classifies_refactoring_as_not_bug` | Risposta "REFACTORING" con motivo | `is_real_bug_fix()` → `(False, "...")` |
+| `test_handles_llm_timeout` | Timeout connessione | Gestione graceful → `(False, "Errore...")` |
+| `test_handles_malformed_response` | JSON invalido | Gestione errore → `(False, "...")` |
+| `test_handles_connection_error` | Ollama non raggiungibile | Gestione errore → `(False, "...")` |
 
 **Vantaggi del mocking:**
 - Test eseguibili senza Ollama attivo
@@ -753,9 +767,8 @@ Test per verificare il comportamento in situazioni limite.
 **Scenari coperti:**
 - Analisi senza LLM (`skip_llm=True`)
 - Skip per pre-filtro messaggio
-- LLM classifica come REFACTORING
-- LLM conferma BUG con SZZ
-- Strategia selezione per tag range
+- LLM classifica come REFACTORING (con spiegazione)
+- LLM conferma BUG con SZZ (con spiegazione)
 - Strategia selezione per date range
 - `limit=0` (analizza tutti i commit)
 
@@ -785,12 +798,12 @@ pytest tests/test_szz_bic.py::TestGetBugInducingCommits::test_szz_identifies_cor
 
 | Metrica | Valore |
 |---------|--------|
-| Test totali | **157** |
-| Test passati | **157** |
+| Test totali | **147** |
+| Test passati | **147** |
 | Coverage totale | **83%** |
 | Coverage branch | **83%** |
 | File di test | **6** |
-| Classi di test | **24** |
+| Classi di test | **20** |
 
 ### 6.8 File Generati
 
@@ -1009,7 +1022,7 @@ szz-run ./repo --limit 50 --output json --skip-llm
 | File sorgente Python | 4 |
 | File sorgente Kotlin | 7 |
 | File test | 6 |
-| Test totali | 157 |
+| Test totali | 147 |
 | Coverage | 83% |
 | Dataset campioni | ~2300 |
 

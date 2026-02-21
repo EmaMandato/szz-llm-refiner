@@ -64,66 +64,6 @@ class SzzAnalyzerService(private val project: Project) {
     fun getLastReport(): AnalysisReport? = currentReport.get()
 
     /**
-     * Fetches available tags from a repository.
-     * Can be used for both local and remote repositories.
-     */
-    fun fetchTags(
-        repoPath: String?,
-        repoUrl: String?,
-        onSuccess: (List<TagInfo>) -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val settings = SzzSettings.getInstance()
-        val pythonPath = settings.pythonPath.ifEmpty { "python" }
-
-        val commandLine = GeneralCommandLine().apply {
-            exePath = pythonPath
-            addParameter("-u")
-            addParameter("-m")
-            addParameter("szz_llm_project.main")
-
-            if (!repoUrl.isNullOrBlank()) {
-                addParameter("--url")
-                addParameter(repoUrl)
-            } else if (!repoPath.isNullOrBlank()) {
-                addParameter(repoPath)
-            }
-
-            addParameter("--list-tags")
-            addParameter("--output")
-            addParameter("json")
-
-            charset = StandardCharsets.UTF_8
-        }
-
-        log.info("Fetching tags: ${commandLine.commandLineString}")
-
-        Thread {
-            try {
-                val process = commandLine.createProcess()
-                val output = process.inputStream.bufferedReader().readText()
-                val exitCode = process.waitFor()
-
-                if (exitCode == 0) {
-                    try {
-                        val response = gson.fromJson(output, TagsResponse::class.java)
-                        onSuccess(response.tags)
-                    } catch (e: Exception) {
-                        log.error("Failed to parse tags response", e)
-                        onError("Failed to parse tags: ${e.message}")
-                    }
-                } else {
-                    val error = process.errorStream.bufferedReader().readText()
-                    onError("Failed to fetch tags: $error")
-                }
-            } catch (e: Exception) {
-                log.error("Error fetching tags", e)
-                onError("Error: ${e.message}")
-            }
-        }.start()
-    }
-
-    /**
      * Runs the SZZ-LLM analysis on the specified repository.
      */
     fun runAnalysis(config: AnalysisConfig) {
@@ -217,16 +157,6 @@ class SzzAnalyzerService(private val project: Project) {
                         addParameter(it)
                     }
                 }
-                SelectionStrategy.TAG_RANGE -> {
-                    config.fromTag?.let {
-                        addParameter("--from-tag")
-                        addParameter(it)
-                    }
-                    config.toTag?.let {
-                        addParameter("--to-tag")
-                        addParameter(it)
-                    }
-                }
                 SelectionStrategy.ALL -> {
                     // No additional parameters needed
                 }
@@ -256,7 +186,6 @@ class SzzAnalyzerService(private val project: Project) {
         // Log selection strategy
         val strategyInfo = when (config.selectionStrategy) {
             SelectionStrategy.DATE_RANGE -> "Date range: ${config.since ?: "start"} to ${config.until ?: "now"}"
-            SelectionStrategy.TAG_RANGE -> "Tag range: ${config.fromTag} to ${config.toTag}"
             SelectionStrategy.ALL -> "All commits"
         }
 

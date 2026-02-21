@@ -419,16 +419,16 @@ class TestLLMRefinerMocked:
         from szz_llm_project.llm_refiner import LLMRefiner
 
         mock_response = mocker.Mock()
-        mock_response.json.return_value = {"response": "BUG"}
+        mock_response.json.return_value = {"response": "CLASSIFICAZIONE: BUG\nMOTIVO: Corregge NullPointerException"}
         mocker.patch('requests.post', return_value=mock_response)
 
         refiner = LLMRefiner()
-        result = refiner.is_real_bug_fix(
+        is_bug, explanation = refiner.is_real_bug_fix(
             commit_message="Fix NullPointerException in UserService",
             diff="- return user.getName();\n+ return user != null ? user.getName() : \"\";"
         )
 
-        assert result is True, "Dovrebbe classificare come BUG"
+        assert is_bug is True, "Dovrebbe classificare come BUG"
 
     def test_classifies_refactoring_as_not_bug(self, mocker):
         """
@@ -437,16 +437,16 @@ class TestLLMRefinerMocked:
         from szz_llm_project.llm_refiner import LLMRefiner
 
         mock_response = mocker.Mock()
-        mock_response.json.return_value = {"response": "REFACTORING"}
+        mock_response.json.return_value = {"response": "CLASSIFICAZIONE: REFACTORING\nMOTIVO: Solo rinomina variabili"}
         mocker.patch('requests.post', return_value=mock_response)
 
         refiner = LLMRefiner()
-        result = refiner.is_real_bug_fix(
+        is_bug, explanation = refiner.is_real_bug_fix(
             commit_message="Refactor: renamed variables for clarity",
             diff="- int x = 5;\n+ int count = 5;"
         )
 
-        assert result is False, "Dovrebbe classificare come REFACTORING"
+        assert is_bug is False, "Dovrebbe classificare come REFACTORING"
 
     def test_handles_llm_timeout(self, mocker):
         """
@@ -458,9 +458,9 @@ class TestLLMRefinerMocked:
         mocker.patch('requests.post', side_effect=requests.Timeout("Connection timed out"))
 
         refiner = LLMRefiner()
-        result = refiner.is_real_bug_fix("Fix bug", "- old\n+ new")
+        is_bug, explanation = refiner.is_real_bug_fix("Fix bug", "- old\n+ new")
 
-        assert result is False, "Dovrebbe restituire False in caso di timeout"
+        assert is_bug is False, "Dovrebbe restituire False in caso di timeout"
 
     def test_handles_malformed_response(self, mocker):
         """
@@ -473,9 +473,9 @@ class TestLLMRefinerMocked:
         mocker.patch('requests.post', return_value=mock_response)
 
         refiner = LLMRefiner()
-        result = refiner.is_real_bug_fix("Fix", "diff")
+        is_bug, explanation = refiner.is_real_bug_fix("Fix", "diff")
 
-        assert result is False, "Dovrebbe gestire risposte malformate"
+        assert is_bug is False, "Dovrebbe gestire risposte malformate"
 
     def test_handles_connection_error(self, mocker):
         """
@@ -487,6 +487,6 @@ class TestLLMRefinerMocked:
         mocker.patch('requests.post', side_effect=requests.ConnectionError("Connection refused"))
 
         refiner = LLMRefiner()
-        result = refiner.is_real_bug_fix("Fix bug", "diff")
+        is_bug, explanation = refiner.is_real_bug_fix("Fix bug", "diff")
 
-        assert result is False, "Dovrebbe restituire False se Ollama non è raggiungibile"
+        assert is_bug is False, "Dovrebbe restituire False se Ollama non è raggiungibile"

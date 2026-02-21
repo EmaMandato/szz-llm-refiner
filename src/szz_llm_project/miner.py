@@ -39,51 +39,8 @@ class GitMiner:
         return result.stdout.strip()
 
     # ==========================================
-    # METODI PER TAG E DATE
+    # METODI PER DATE
     # ==========================================
-
-    def get_tags(self) -> List[dict]:
-        """
-        Restituisce la lista dei tag con data e hash.
-        Ordinati dal più recente al più vecchio.
-
-        Returns:
-            Lista di dict con 'name', 'hash', 'date'
-        """
-        # Formato: tag_name|commit_hash|date
-        output = self._run_git(
-            "tag", "-l", "--format=%(refname:short)|%(objectname:short)|%(creatordate:iso-strict)"
-        )
-
-        tags = []
-        for line in output.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split("|")
-            if len(parts) >= 2:
-                tag_info = {
-                    "name": parts[0],
-                    "hash": parts[1],
-                    "date": parts[2] if len(parts) > 2 else ""
-                }
-                tags.append(tag_info)
-
-        # Ordina per data (più recente prima)
-        # Se la data non è disponibile, metti alla fine
-        def sort_key(t):
-            if t["date"]:
-                try:
-                    return datetime.fromisoformat(t["date"].replace("Z", "+00:00"))
-                except:
-                    pass
-            return datetime.min
-
-        tags.sort(key=sort_key, reverse=True)
-        return tags
-
-    def get_tag_names(self) -> List[str]:
-        """Restituisce solo i nomi dei tag, ordinati dal più recente."""
-        return [t["name"] for t in self.get_tags()]
 
     def get_commit_date(self, commit_hash: str) -> Optional[datetime]:
         """Restituisce la data di un commit."""
@@ -94,32 +51,6 @@ class GitMiner:
             except:
                 pass
         return None
-
-    def get_tag_commit_hash(self, tag_name: str) -> Optional[str]:
-        """Restituisce l'hash del commit puntato da un tag."""
-        result = self._run_git("rev-list", "-n", "1", tag_name)
-        return result if result else None
-
-    def get_commits_between_tags(self, from_tag: str, to_tag: str) -> List[str]:
-        """
-        Restituisce gli hash dei commit tra due tag (escluso from_tag, incluso to_tag).
-
-        Args:
-            from_tag: Tag di partenza (più vecchio)
-            to_tag: Tag di arrivo (più recente)
-
-        Returns:
-            Lista di hash commit
-        """
-        # Formato: from_tag..to_tag restituisce i commit raggiungibili da to_tag ma non da from_tag
-        output = self._run_git("rev-list", f"{from_tag}..{to_tag}")
-
-        commits = []
-        for line in output.splitlines():
-            if line.strip():
-                commits.append(line.strip())
-
-        return commits
 
     def get_commits_between_dates(
             self,
@@ -279,9 +210,7 @@ class GitMiner:
     def get_fixing_commits(
             self,
             since: Optional[datetime] = None,
-            until: Optional[datetime] = None,
-            from_tag: Optional[str] = None,
-            to_tag: Optional[str] = None
+            until: Optional[datetime] = None
     ) -> List[str]:
         """
         Cerca tutti i commit che potrebbero essere fix di bug
@@ -289,13 +218,10 @@ class GitMiner:
 
         Supporta filtri per:
         - Range di date (since/until)
-        - Range di tag (from_tag/to_tag)
 
         Args:
             since: Data di inizio (opzionale)
             until: Data di fine (opzionale)
-            from_tag: Tag di partenza (opzionale)
-            to_tag: Tag di arrivo (opzionale)
 
         Returns:
             Lista di hash dei commit che sono potenziali fix
@@ -303,11 +229,7 @@ class GitMiner:
         fixing_hashes = []
 
         # Determina quali commit considerare
-        if from_tag and to_tag:
-            # Filtro per tag
-            candidate_commits = set(self.get_commits_between_tags(from_tag, to_tag))
-            self._log(f"  [Filter] Commits between tags {from_tag}..{to_tag}: {len(candidate_commits)}")
-        elif since or until:
+        if since or until:
             # Filtro per date
             candidate_commits = set(self.get_commits_between_dates(since, until))
             date_range = f"{since.date() if since else 'beginning'} to {until.date() if until else 'now'}"

@@ -17,7 +17,9 @@ data class AnalysisResult(
     @SerializedName("bug_inducing_commits")
     val bugInducingCommits: List<String>,
     @SerializedName("skipped_reason")
-    val skippedReason: String? = null
+    val skippedReason: String? = null,
+    @SerializedName("llm_explanation")
+    val llmExplanation: String? = null
 )
 
 data class FilterStats(
@@ -58,25 +60,11 @@ data class AnalysisError(
 )
 
 /**
- * Tag information from repository
- */
-data class TagInfo(
-    val name: String,
-    val hash: String,
-    val date: String? = null
-)
-
-data class TagsResponse(
-    val tags: List<TagInfo>
-)
-
-/**
  * Selection strategy for commit filtering
  */
 enum class SelectionStrategy(val displayName: String) {
     ALL("All Commits"),
-    DATE_RANGE("Date Range"),
-    TAG_RANGE("Tag/Release Range");
+    DATE_RANGE("Date Range");
 
     override fun toString() = displayName
 }
@@ -96,10 +84,7 @@ data class AnalysisConfig(
     val selectionStrategy: SelectionStrategy = SelectionStrategy.ALL,
     // Date range parameters
     val since: String? = null,  // Format: YYYY-MM-DD
-    val until: String? = null,  // Format: YYYY-MM-DD
-    // Tag range parameters
-    val fromTag: String? = null,
-    val toTag: String? = null
+    val until: String? = null   // Format: YYYY-MM-DD
 )
 
 /**

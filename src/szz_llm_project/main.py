@@ -33,6 +33,7 @@ class AnalysisResult:
     is_bug: bool
     bug_inducing_commits: list[str]
     skipped_reason: Optional[str] = None  # Motivo se scartato
+    llm_explanation: Optional[str] = None  # Spiegazione LLM della classificazione
 
 
 @dataclass
@@ -56,7 +57,7 @@ class AnalysisReport:
     results: list[dict]
     errors: list[str]
     filter_stats: dict = field(default_factory=dict)
-    selection_strategy: str = "all"  # "all", "date_range", "tag_range"
+    selection_strategy: str = "all"  # "all", "date_range"
     selection_params: dict = field(default_factory=dict)  # Parametri usati per la selezione
 
 
@@ -118,15 +119,6 @@ def check_ollama_running(url: str = "http://localhost:11434") -> bool:
         return False
 
 
-def get_tags_list(repo_path: str) -> List[dict]:
-    """
-    Restituisce la lista dei tag del repository.
-    Usato per l'opzione --list-tags.
-    """
-    miner = GitMiner(repo_path)
-    return miner.get_tags()
-
-
 def run_analysis(
         repo_path: str,
         branch: str = "main",
@@ -135,15 +127,13 @@ def run_analysis(
         output_format: str = "text",
         skip_llm: bool = False,
         since: Optional[datetime] = None,
-        until: Optional[datetime] = None,
-        from_tag: Optional[str] = None,
-        to_tag: Optional[str] = None
+        until: Optional[datetime] = None
 ) -> AnalysisReport:
     """
     Esegue l'analisi SZZ completa con il nuovo flusso di filtri.
 
     Flusso:
-    1. Mining dei potenziali fix commits (con filtri data/tag)
+    1. Mining dei potenziali fix commits (con filtri data)
     2. Pre-filtro sul messaggio (scarta refactor/docs/style)
     3. Validazione LLM dei fix commits
     4. SZZ con git blame
@@ -160,11 +150,7 @@ def run_analysis(
     refiner = LLMRefiner(model=model) if not skip_llm else None
 
     # Determina la strategia di selezione
-    if from_tag and to_tag:
-        selection_strategy = "tag_range"
-        selection_params = {"from_tag": from_tag, "to_tag": to_tag}
-        log(f"Selection strategy: Tag range ({from_tag} → {to_tag})")
-    elif since or until:
+    if since or until:
         selection_strategy = "date_range"
         selection_params = {
             "since": since.isoformat() if since else None,
@@ -184,9 +170,7 @@ def run_analysis(
     log("\nScanning repository for fix commits...")
     potential_fixes = miner.get_fixing_commits(
         since=since,
-        until=until,
-        from_tag=from_tag,
-        to_tag=to_tag
+        until=until
     )
     total_potential = len(potential_fixes)
     log(f"Found {total_potential} potential fix commits.")
@@ -228,11 +212,14 @@ def run_analysis(
         # ----------------------------------------
         # STEP 3: Validazione LLM
         # ----------------------------------------
+        llm_explanation = None
         if refiner and not skip_llm:
-            is_bug = refiner.is_real_bug_fix(msg, diff)
+            is_bug, llm_explanation = refiner.is_real_bug_fix(msg, diff)
 
             if not is_bug:
                 log(f"    ⏭️  SKIP (LLM: REFACTORING)")
+                if llm_explanation:
+                    log(f"    💬 Motivo: {llm_explanation}")
                 blacklist.add(commit_hash)
                 filter_stats.skipped_by_llm += 1
 
@@ -241,11 +228,14 @@ def run_analysis(
                     commit_message=msg[:200],
                     is_bug=False,
                     bug_inducing_commits=[],
-                    skipped_reason="llm:refactoring"
+                    skipped_reason="llm:refactoring",
+                    llm_explanation=llm_explanation
                 )))
                 continue
             else:
                 log(f"    ✅ LLM: BUG FIX confermato")
+                if llm_explanation:
+                    log(f"    💬 Motivo: {llm_explanation}")
         else:
             # Senza LLM, considera come bug se ha passato il pre-filtro
             is_bug = True
@@ -274,7 +264,8 @@ def run_analysis(
             commit_message=msg[:200],
             is_bug=True,
             bug_inducing_commits=bics,
-            skipped_reason=None
+            skipped_reason=None,
+            llm_explanation=llm_explanation
         )))
 
     log("\n" + "=" * 50)
@@ -401,17 +392,11 @@ Examples:
   # Analyze commits between dates
   szz-run ./repo --since 2024-01-01 --until 2024-06-30
 
-  # Analyze commits between tags/releases
-  szz-run ./repo --from-tag v1.0.0 --to-tag v2.0.0
-
-  # List available tags
-  szz-run ./repo --list-tags
-
   # Clone and analyze remote repository
-  szz-run --url https://github.com/user/repo --from-tag v1.0 --to-tag v1.1
+  szz-run --url https://github.com/user/repo --since 2024-01-01
 
   # JSON output for plugin integration
-  szz-run ./repo --output json --from-tag v1.0 --to-tag v2.0
+  szz-run ./repo --output json --since 2024-01-01 --until 2024-06-30
 
   # Validate LLM accuracy against a labeled dataset
   szz-run ./repo --validate ground_truth.csv
@@ -447,19 +432,6 @@ Examples:
     selection_group.add_argument(
         "--until",
         help="Analyze commits before this date (YYYY-MM-DD)"
-    )
-    selection_group.add_argument(
-        "--from-tag",
-        help="Start tag for range analysis (older tag)"
-    )
-    selection_group.add_argument(
-        "--to-tag",
-        help="End tag for range analysis (newer tag)"
-    )
-    selection_group.add_argument(
-        "--list-tags",
-        action="store_true",
-        help="List available tags and exit"
     )
 
     # Analysis options
@@ -523,13 +495,6 @@ Examples:
             print("ERROR: Git is not installed or not in PATH")
         sys.exit(1)
 
-    # Validate selection strategy
-    if (args.from_tag and not args.to_tag) or (args.to_tag and not args.from_tag):
-        parser.error("--from-tag and --to-tag must be used together")
-
-    if (args.from_tag or args.to_tag) and (args.since or args.until):
-        parser.error("Cannot use both tag range and date range. Choose one strategy.")
-
     # Check Ollama (if LLM is enabled)
     if not args.skip_llm and not check_ollama_running():
         log("WARNING: Ollama is not running. LLM refinement will fail.")
@@ -545,18 +510,6 @@ Examples:
             cloned = True
         elif not os.path.isdir(repo_path):
             raise ValueError(f"Directory not found: {repo_path}")
-
-        # Handle --list-tags
-        if args.list_tags:
-            tags = get_tags_list(repo_path)
-            if _json_output:
-                print(json.dumps({"tags": tags}))
-            else:
-                print("Available tags:")
-                for tag in tags:
-                    date_str = tag.get("date", "")[:10] if tag.get("date") else "unknown date"
-                    print(f"  {tag['name']:30} {date_str}")
-            return
 
         # Handle --validate mode
         if args.validate:
@@ -604,9 +557,7 @@ Examples:
             output_format=args.output,
             skip_llm=args.skip_llm,
             since=since,
-            until=until,
-            from_tag=args.from_tag,
-            to_tag=args.to_tag
+            until=until
         )
 
         # Output
